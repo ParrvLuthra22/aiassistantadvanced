@@ -1,0 +1,762 @@
+"""
+Event Schemas Module - Typed event definitions for the event bus.
+
+This module defines all event types used for inter-agent communication.
+Events are immutable dataclasses with automatic timestamp and ID generation.
+
+Design Principles:
+    - Events are immutable (frozen dataclasses)
+    - Events carry all necessary context
+    - Events are serializable for persistence/debugging
+    - Events follow a clear naming convention: <Domain><Action>Event
+
+TODO: Add event versioning for backward compatibility
+TODO: Add event serialization to JSON/MessagePack
+TODO: Add event validation with Pydantic
+TODO: Add event compression for large payloads
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
+
+
+class EventPriority(Enum):
+    """
+    Event priority levels for processing order.
+    
+    Higher priority events are processed before lower priority ones.
+    """
+    
+    LOW = auto()
+    NORMAL = auto()
+    HIGH = auto()
+    CRITICAL = auto()
+
+
+class EventCategory(Enum):
+    """
+    Event categories for filtering and routing.
+    
+    TODO: Add more categories as system expands
+    """
+    
+    SYSTEM = "system"
+    VOICE = "voice"
+    INTENT = "intent"
+    MEMORY = "memory"
+    UI = "ui"
+    EXTERNAL = "external"
+    AGENT = "agent"
+
+
+@dataclass(frozen=True)
+class BaseEvent:
+    """
+    Base class for all events in the system.
+    
+    All events inherit from this class and gain automatic
+    ID generation and timestamp tracking.
+    
+    Required fields per specification:
+        - type: Event type name (derived from class name)
+        - payload: Event-specific data (derived from subclass fields)
+        - source: The agent/component that created this event
+        - timestamp: When the event was created
+    
+    Attributes:
+        event_id: Unique identifier for this event instance
+        timestamp: When the event was created
+        priority: Processing priority
+        source: The agent/component that created this event
+        correlation_id: ID to track related events (for request/response)
+        metadata: Optional dict for additional context
+    
+    Example:
+        @dataclass(frozen=True)
+        class MyCustomEvent(BaseEvent):
+            my_data: str
+    """
+    
+    event_id: UUID = field(default_factory=uuid4)
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    priority: EventPriority = field(default=EventPriority.NORMAL)
+    source: str = field(default="unknown")
+    correlation_id: Optional[UUID] = field(default=None)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def type(self) -> str:
+        """
+        Get the event type name.
+        
+        Returns the class name as the event type identifier.
+        This ensures every event has an explicit type.
+        """
+        return self.__class__.__name__
+    
+    @property
+    def payload(self) -> Dict[str, Any]:
+        """
+        Get the event payload as a dictionary.
+        
+        Extracts all subclass-specific fields (excluding base fields)
+        as a dictionary for serialization and logging.
+        """
+        base_fields = {'event_id', 'timestamp', 'priority', 'source', 'correlation_id', 'metadata'}
+        payload_data = {}
+        for f in self.__dataclass_fields__:
+            if f not in base_fields:
+                payload_data[f] = getattr(self, f)
+        return payload_data
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serialize the event to a dictionary.
+        
+        Useful for logging, debugging, and persistence.
+        """
+        return {
+            "type": self.type,
+            "event_id": str(self.event_id),
+            "timestamp": self.timestamp.isoformat(),
+            "priority": self.priority.name,
+            "source": self.source,
+            "correlation_id": str(self.correlation_id) if self.correlation_id else None,
+            "metadata": self.metadata,
+            "payload": self.payload,
+        }
+    
+    def to_json(self) -> str:
+        """Serialize the event to a JSON string."""
+        import json
+        return json.dumps(self.to_dict(), default=str)
+    
+    def with_correlation(self, correlation_id: UUID) -> "BaseEvent":
+        """
+        Create a new event with the specified correlation ID.
+        
+        Note: This returns a new instance since events are frozen.
+        """
+        # Subclasses should override this for proper typing
+        raise NotImplementedError("Subclasses must implement with_correlation")
+
+
+# =============================================================================
+# Voice Events - Speech recognition and synthesis
+# =============================================================================
+
+@dataclass(frozen=True)
+class VoiceInputEvent(BaseEvent):
+    """
+    Event emitted when voice input is recognized (USER_SPOKE).
+    
+    Attributes:
+        text: The transcribed text from speech
+        confidence: Recognition confidence (0.0 to 1.0)
+        language: Detected language code (e.g., 'en-US')
+        audio_duration: Duration of the audio in seconds
+        is_wake_word: Whether this came from wake word detection
+        is_partial: Whether this is a partial (streaming) result
+    
+    TODO: Add audio waveform data for advanced processing
+    TODO: Add speaker identification
+    """
+    
+    text: str = ""
+    confidence: float = 0.0
+    language: str = "en-US"
+    audio_duration: float = 0.0
+    is_wake_word: bool = False
+    is_partial: bool = False
+    source: str = field(default="VoiceAgent")
+
+
+@dataclass(frozen=True)
+class VoiceOutputEvent(BaseEvent):
+    """
+    Event to trigger text-to-speech output.
+    
+    Attributes:
+        text: Text to speak
+        voice_id: Voice profile to use
+        speed: Speech rate multiplier
+        wait_for_completion: Whether to block until speech completes
+    
+    TODO: Add SSML support for advanced speech control
+    TODO: Add emotion/tone parameters
+    """
+    
+    text: str = ""
+    voice_id: str = "default"
+    speed: float = 1.0
+    wait_for_completion: bool = False
+
+
+@dataclass(frozen=True)
+class WakeWordDetectedEvent(BaseEvent):
+    """
+    Event emitted when wake word (e.g., "Hey JARVIS") is detected.
+    
+    Attributes:
+        wake_word: The detected wake word
+        confidence: Detection confidence
+    """
+    
+    wake_word: str = "jarvis"
+    confidence: float = 0.0
+    source: str = field(default="voice_agent")
+
+
+@dataclass(frozen=True)
+class ListeningStateChangedEvent(BaseEvent):
+    """
+    Event emitted when the listening state changes.
+    
+    Useful for UI feedback (e.g., showing microphone indicator).
+    """
+    
+    is_listening: bool = False
+    listening_mode: str = ""  # "wake_word", "command", "idle"
+    reason: str = ""
+    source: str = field(default="voice_agent")
+
+
+# =============================================================================
+# Intent Events - Natural language understanding
+# =============================================================================
+
+@dataclass(frozen=True)
+class IntentRecognizedEvent(BaseEvent):
+    """
+    Event emitted when user intent is identified.
+    
+    Attributes:
+        intent: The identified intent name
+        confidence: Recognition confidence
+        entities: Extracted entities from the utterance
+        raw_text: Original user input
+        slots: Named parameters extracted from the intent
+    
+    TODO: Add intent disambiguation when confidence is low
+    TODO: Add multi-intent support
+    """
+    
+    intent: str = ""
+    confidence: float = 0.0
+    entities: Dict[str, Any] = field(default_factory=dict)
+    raw_text: str = ""
+    slots: Dict[str, str] = field(default_factory=dict)
+    source: str = field(default="intent_agent")
+
+
+@dataclass(frozen=True)
+class ParsedIntent:
+    """
+    Single parsed intent with entities.
+    
+    Used as part of MultiIntentEvent for command sequences.
+    """
+    intent: str
+    entities: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.0
+    
+
+@dataclass(frozen=True)
+class MultiIntentEvent(BaseEvent):
+    """
+    Event emitted when multiple intents are detected in one utterance.
+    
+    Example: "Open VS Code and tell me CPU usage" becomes:
+    [
+        {"intent": "OPEN_APP", "entities": {"app": "VS Code"}},
+        {"intent": "GET_SYSTEM_STATS", "entities": {"metric": "cpu"}}
+    ]
+    
+    Attributes:
+        intents: List of parsed intents in order
+        raw_text: Original user input
+        execution_mode: "sequential" or "parallel"
+    """
+    
+    intents: List[Dict[str, Any]] = field(default_factory=list)
+    raw_text: str = ""
+    execution_mode: str = "sequential"  # "sequential" or "parallel"
+    source: str = field(default="intent_agent")
+
+
+@dataclass(frozen=True)
+class IntentUnknownEvent(BaseEvent):
+    """
+    Event emitted when intent cannot be determined.
+    
+    Triggers fallback behavior or clarification request.
+    """
+    
+    raw_text: str = ""
+    suggestions: List[str] = field(default_factory=list)
+    source: str = field(default="intent_agent")
+
+
+# =============================================================================
+# Orchestrator Events - Brain planning and coordination
+# =============================================================================
+
+@dataclass(frozen=True)
+class ActionRequestEvent(BaseEvent):
+    """
+    Event emitted by the Orchestrator to request an agent to perform an action.
+    
+    The Brain NEVER executes tasks directly - it emits ActionRequestEvents
+    to delegate work to the appropriate agent.
+    
+    Attributes:
+        action: The action to perform (e.g., 'open_application', 'set_volume')
+        target_agent: Which agent should handle this (e.g., 'SystemAgent')
+        parameters: Action-specific parameters
+        priority_level: Execution priority (1=highest, 5=lowest)
+        requires_confirmation: Whether user confirmation is needed before execution
+        part_of_plan: Whether this is part of a multi-step plan
+        plan_id: ID of the plan this action belongs to (if multi-step)
+        step_number: Step number within the plan
+    """
+    
+    action: str = ""
+    target_agent: str = ""
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    priority_level: int = 3
+    requires_confirmation: bool = False
+    part_of_plan: bool = False
+    plan_id: Optional[UUID] = None
+    step_number: int = 0
+    source: str = field(default="Brain")
+
+
+@dataclass(frozen=True)
+class ActionResultEvent(BaseEvent):
+    """
+    Event emitted by an agent when an action completes.
+    
+    Attributes:
+        action: The action that was performed
+        success: Whether the action succeeded
+        result: Result data from the action
+        error: Error message if failed
+        execution_time_ms: How long the action took
+        plan_id: ID of the plan this was part of (if multi-step)
+        step_number: Step number within the plan
+    """
+    
+    action: str = ""
+    success: bool = False
+    result: Any = None
+    error: str = ""
+    execution_time_ms: float = 0.0
+    plan_id: Optional[UUID] = None
+    step_number: int = 0
+
+
+@dataclass(frozen=True)
+class PlanCreatedEvent(BaseEvent):
+    """
+    Event emitted when the Orchestrator creates a multi-step execution plan.
+    
+    Attributes:
+        plan_id: Unique identifier for this plan
+        description: Human-readable description of the plan
+        steps: List of step descriptions
+        total_steps: Total number of steps in the plan
+        estimated_duration_ms: Estimated total execution time
+    """
+    
+    plan_id: UUID = field(default_factory=uuid4)
+    description: str = ""
+    steps: List[str] = field(default_factory=list)
+    total_steps: int = 0
+    estimated_duration_ms: float = 0.0
+    source: str = field(default="Brain")
+
+
+@dataclass(frozen=True)
+class PlanStepCompletedEvent(BaseEvent):
+    """
+    Event emitted when a step in a multi-step plan completes.
+    
+    Attributes:
+        plan_id: ID of the plan
+        step_number: Which step completed
+        total_steps: Total steps in the plan
+        success: Whether the step succeeded
+        continue_plan: Whether to continue with the next step
+    """
+    
+    plan_id: UUID = field(default_factory=uuid4)
+    step_number: int = 0
+    total_steps: int = 0
+    success: bool = False
+    continue_plan: bool = True
+
+
+@dataclass(frozen=True)
+class PlanCompletedEvent(BaseEvent):
+    """
+    Event emitted when a multi-step plan finishes.
+    
+    Attributes:
+        plan_id: ID of the completed plan
+        success: Whether all steps succeeded
+        steps_completed: Number of steps that were completed
+        total_steps: Total steps in the plan
+        summary: Summary of what was accomplished
+    """
+    
+    plan_id: UUID = field(default_factory=uuid4)
+    success: bool = False
+    steps_completed: int = 0
+    total_steps: int = 0
+    summary: str = ""
+    source: str = field(default="Brain")
+
+
+@dataclass(frozen=True)
+class ContextUpdatedEvent(BaseEvent):
+    """
+    Event emitted when conversation context is updated.
+    
+    Allows agents to be aware of context changes for smarter responses.
+    
+    Attributes:
+        context_type: Type of context update ('turn', 'topic', 'entity')
+        context_key: What was updated
+        context_value: The new value
+        turn_number: Current conversation turn
+    """
+    
+    context_type: str = ""
+    context_key: str = ""
+    context_value: Any = None
+    turn_number: int = 0
+    source: str = field(default="Brain")
+
+
+@dataclass(frozen=True)
+class ClarificationNeededEvent(BaseEvent):
+    """
+    Event emitted when the Orchestrator needs clarification from the user.
+    
+    Attributes:
+        original_text: What the user said
+        ambiguity: What is unclear
+        options: Possible interpretations
+        question: Question to ask the user
+    """
+    
+    original_text: str = ""
+    ambiguity: str = ""
+    options: List[str] = field(default_factory=list)
+    question: str = ""
+    source: str = field(default="Brain")
+
+
+# =============================================================================
+# System Events - macOS system interactions
+# =============================================================================
+
+@dataclass(frozen=True)
+class SystemCommandEvent(BaseEvent):
+    """
+    Event to execute a system command.
+    
+    Attributes:
+        command: Command type (e.g., 'open_app', 'set_volume')
+        parameters: Command-specific parameters
+        requires_confirmation: Whether user confirmation is needed
+    
+    TODO: Add command timeout
+    TODO: Add sandboxing options
+    """
+    
+    command: str = ""
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    requires_confirmation: bool = False
+
+
+@dataclass(frozen=True)
+class SystemCommandResultEvent(BaseEvent):
+    """
+    Event emitted when a system command completes.
+    
+    Attributes:
+        success: Whether the command succeeded
+        result: Command output or result data
+        error: Error message if failed
+        execution_time: How long the command took
+    """
+    
+    success: bool = False
+    result: Any = None
+    error: Optional[str] = None
+    execution_time: float = 0.0
+    original_command: str = ""
+    source: str = field(default="system_agent")
+
+
+@dataclass(frozen=True)
+class ApplicationLaunchedEvent(BaseEvent):
+    """Event emitted when an application is launched."""
+    
+    app_name: str = ""
+    app_bundle_id: str = ""
+    success: bool = False
+    source: str = field(default="system_agent")
+
+
+@dataclass(frozen=True)
+class SystemNotificationEvent(BaseEvent):
+    """
+    Event to display a system notification.
+    
+    TODO: Add notification actions
+    TODO: Add notification grouping
+    """
+    
+    title: str = ""
+    message: str = ""
+    subtitle: str = ""
+    sound: bool = True
+
+
+# =============================================================================
+# Memory Events - Context and history management
+# =============================================================================
+
+@dataclass(frozen=True)
+class MemoryStoreEvent(BaseEvent):
+    """
+    Event to store information in memory.
+    
+    Attributes:
+        key: Memory key for retrieval
+        value: Data to store
+        ttl: Time-to-live in seconds (None = permanent)
+        memory_type: Type of memory (short_term, long_term, episodic)
+    """
+    
+    key: str = ""
+    value: Any = None
+    ttl: Optional[int] = None
+    memory_type: str = "short_term"
+
+
+@dataclass(frozen=True)
+class MemoryQueryEvent(BaseEvent):
+    """
+    Event to query memory.
+    
+    Attributes:
+        query: Search query or key
+        memory_type: Type of memory to search
+        limit: Maximum results to return
+    """
+    
+    query: str = ""
+    memory_type: str = "all"
+    limit: int = 10
+
+
+@dataclass(frozen=True)
+class MemoryQueryResultEvent(BaseEvent):
+    """
+    Event containing memory query results.
+    
+    Attributes:
+        results: List of matching memory items
+        query: Original query
+        total_matches: Total number of matches (may be more than returned)
+    """
+    
+    results: List[Dict[str, Any]] = field(default_factory=list)
+    query: str = ""
+    total_matches: int = 0
+    source: str = field(default="memory_agent")
+
+
+@dataclass(frozen=True)
+class ConversationContextEvent(BaseEvent):
+    """
+    Event containing conversation context for other agents.
+    
+    Provides recent conversation history for context-aware responses.
+    """
+    
+    messages: List[Dict[str, str]] = field(default_factory=list)
+    summary: str = ""
+    session_id: UUID = field(default_factory=uuid4)
+    source: str = field(default="memory_agent")
+
+
+# =============================================================================
+# Agent Lifecycle Events
+# =============================================================================
+
+@dataclass(frozen=True)
+class AgentStartedEvent(BaseEvent):
+    """Event emitted when an agent starts."""
+    
+    agent_name: str = ""
+    agent_type: str = ""
+    capabilities: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AgentStoppedEvent(BaseEvent):
+    """Event emitted when an agent stops."""
+    
+    agent_name: str = ""
+    reason: str = ""
+    clean_shutdown: bool = True
+
+
+@dataclass(frozen=True)
+class AgentErrorEvent(BaseEvent):
+    """Event emitted when an agent encounters an error."""
+    
+    agent_name: str = ""
+    error_type: str = ""
+    error_message: str = ""
+    is_recoverable: bool = True
+    priority: EventPriority = field(default=EventPriority.HIGH)
+
+
+@dataclass(frozen=True)
+class AgentHealthCheckEvent(BaseEvent):
+    """
+    Event for agent health monitoring.
+    
+    TODO: Add detailed health metrics
+    """
+    
+    agent_name: str = ""
+    is_healthy: bool = True
+    last_activity: Optional[datetime] = None
+    pending_tasks: int = 0
+
+
+# =============================================================================
+# Orchestrator Events
+# =============================================================================
+
+@dataclass(frozen=True)
+class TaskAssignedEvent(BaseEvent):
+    """
+    Event emitted when a task is assigned to an agent.
+    
+    Used by the orchestrator to delegate work.
+    """
+    
+    task_id: UUID = field(default_factory=uuid4)
+    target_agent: str = ""
+    task_type: str = ""
+    payload: Dict[str, Any] = field(default_factory=dict)
+    deadline: Optional[datetime] = None
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
+class TaskCompletedEvent(BaseEvent):
+    """Event emitted when a task is completed."""
+    
+    task_id: UUID = field(default_factory=uuid4)
+    success: bool = False
+    result: Any = None
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ShutdownRequestedEvent(BaseEvent):
+    """
+    Event to request system shutdown.
+    
+    All agents should cleanup when receiving this event.
+    """
+    
+    reason: str = ""
+    force: bool = False
+    priority: EventPriority = field(default=EventPriority.CRITICAL)
+    source: str = field(default="orchestrator")
+
+
+# =============================================================================
+# Response Events - For agent responses to user
+# =============================================================================
+
+@dataclass(frozen=True)
+class ResponseGeneratedEvent(BaseEvent):
+    """
+    Event containing a generated response for the user.
+    
+    Attributes:
+        text: The response text
+        should_speak: Whether to speak the response
+        display_text: Optional formatted text for display (may differ from spoken)
+        actions: List of follow-up actions available
+    """
+    
+    text: str = ""
+    should_speak: bool = True
+    display_text: Optional[str] = None
+    actions: List[Dict[str, Any]] = field(default_factory=list)
+    source: str = field(default="orchestrator")
+
+
+# =============================================================================
+# Event Registry - For dynamic event handling
+# =============================================================================
+
+EVENT_REGISTRY: Dict[str, type] = {
+    "VoiceInputEvent": VoiceInputEvent,
+    "VoiceOutputEvent": VoiceOutputEvent,
+    "WakeWordDetectedEvent": WakeWordDetectedEvent,
+    "ListeningStateChangedEvent": ListeningStateChangedEvent,
+    "IntentRecognizedEvent": IntentRecognizedEvent,
+    "IntentUnknownEvent": IntentUnknownEvent,
+    "MultiIntentEvent": MultiIntentEvent,
+    "ParsedIntent": ParsedIntent,
+    "SystemCommandEvent": SystemCommandEvent,
+    "SystemCommandResultEvent": SystemCommandResultEvent,
+    "ApplicationLaunchedEvent": ApplicationLaunchedEvent,
+    "SystemNotificationEvent": SystemNotificationEvent,
+    "MemoryStoreEvent": MemoryStoreEvent,
+    "MemoryQueryEvent": MemoryQueryEvent,
+    "MemoryQueryResultEvent": MemoryQueryResultEvent,
+    "ConversationContextEvent": ConversationContextEvent,
+    "AgentStartedEvent": AgentStartedEvent,
+    "AgentStoppedEvent": AgentStoppedEvent,
+    "AgentErrorEvent": AgentErrorEvent,
+    "AgentHealthCheckEvent": AgentHealthCheckEvent,
+    "TaskAssignedEvent": TaskAssignedEvent,
+    "TaskCompletedEvent": TaskCompletedEvent,
+    "ShutdownRequestedEvent": ShutdownRequestedEvent,
+    "ResponseGeneratedEvent": ResponseGeneratedEvent,
+    # Orchestrator events
+    "ActionRequestEvent": ActionRequestEvent,
+    "ActionResultEvent": ActionResultEvent,
+    "PlanCreatedEvent": PlanCreatedEvent,
+    "PlanStepCompletedEvent": PlanStepCompletedEvent,
+    "PlanCompletedEvent": PlanCompletedEvent,
+    "ContextUpdatedEvent": ContextUpdatedEvent,
+    "ClarificationNeededEvent": ClarificationNeededEvent,
+}
+
+
+def get_event_class(event_name: str) -> Optional[type]:
+    """
+    Get event class by name.
+    
+    Useful for deserializing events from storage/network.
+    """
+    return EVENT_REGISTRY.get(event_name)

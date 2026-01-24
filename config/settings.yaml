@@ -1,0 +1,291 @@
+# =============================================================================
+# JARVIS Virtual Assistant Configuration
+# =============================================================================
+# This file contains all configuration options for the assistant.
+# Environment variables can override these settings using the format:
+# JARVIS_<SECTION>_<KEY> (e.g., JARVIS_VOICE_WAKE_WORD)
+#
+# TODO: Add configuration validation schema
+# TODO: Add hot-reload support for runtime changes
+# TODO: Add environment-specific overrides (dev, staging, prod)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# General Settings
+# -----------------------------------------------------------------------------
+general:
+  # Assistant name and personality
+  assistant_name: "JARVIS"
+  version: "0.1.0"
+  
+  # Logging configuration
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  log_file: "logs/jarvis.log"
+  log_rotation: "daily"  # daily, size, none
+  log_max_size_mb: 10
+  log_backup_count: 7
+  
+  # Debug mode enables verbose logging and additional checks
+  debug_mode: false
+
+# -----------------------------------------------------------------------------
+# Voice Agent Configuration
+# -----------------------------------------------------------------------------
+voice:
+  # Wake word settings
+  wake_word: "jarvis"
+  wake_word_sensitivity: 0.5  # 0.0 to 1.0
+  
+  # Vosk settings for wake word detection (lightweight, always-on)
+  vosk:
+    # Path to Vosk model directory (download from https://alphacephei.com/vosk/models)
+    # Recommended: vosk-model-small-en-us-0.15 for wake word detection
+    model_path: "models/vosk-model-small-en-us-0.15"
+    # Sample rate must match model expectations
+    sample_rate: 16000
+  
+  # Whisper.cpp settings for full transcription (high accuracy)
+  whisper:
+    # Path to whisper.cpp binary (build from https://github.com/ggerganov/whisper.cpp)
+    binary_path: "/usr/local/bin/whisper-cpp"
+    # Path to whisper model file (.bin format)
+    # Recommended: ggml-base.en.bin for English-only, good accuracy
+    model_path: "models/ggml-base.en.bin"
+    # Language (use 'en' for English-only models)
+    language: "en"
+    # Number of threads for transcription
+    threads: 4
+    # Output format: txt, json, srt, vtt
+    output_format: "json"
+  
+  # Speech recognition settings
+  recognition:
+    # Provider: 'vosk_whisper' (Vosk for wake word, whisper.cpp for transcription)
+    provider: "vosk_whisper"
+    
+    # Audio settings
+    sample_rate: 16000
+    channels: 1
+    chunk_duration_ms: 100
+    
+    # Recording buffer settings
+    buffer_seconds: 0.5  # Audio buffer before wake word
+    
+    # Silence detection (for end of speech)
+    silence_threshold: 500  # RMS threshold for silence
+    silence_duration_ms: 1500  # How long to wait after speech ends
+    max_recording_seconds: 30  # Maximum recording duration
+    min_recording_seconds: 0.5  # Minimum recording to process
+    
+    # Voice Activity Detection (VAD)
+    vad_aggressiveness: 2  # 0-3, higher = more aggressive filtering
+  
+  # Text-to-speech settings
+  synthesis:
+    # Provider: 'pyttsx3' (offline, cross-platform), 'system' (macOS say)
+    # Using 'system' for more reliable macOS speech
+    provider: "system"
+    voice: "Samantha"  # macOS voice name
+    rate: 180  # Words per minute
+    volume: 1.0  # 0.0 to 1.0
+    
+    # Fallback to system TTS if pyttsx3 fails
+    fallback_provider: "system"
+    fallback_voice: "Samantha"
+
+# -----------------------------------------------------------------------------
+# Intent Agent Configuration
+# -----------------------------------------------------------------------------
+intent:
+  # NLU provider: 'gemini', 'openai', 'local', 'rasa', 'custom'
+  provider: "gemini"
+  
+  # Gemini settings (if using Gemini provider)
+  gemini:
+    model: "gemini-2.0-flash"
+    temperature: 0.3
+    max_tokens: 500
+    # API key should be in environment: GEMINI_API_KEY
+  
+  # OpenAI settings (if using OpenAI provider)
+  openai:
+    model: "gpt-4"
+    temperature: 0.3
+    max_tokens: 500
+    # API key should be in environment: OPENAI_API_KEY
+  
+  # Confidence thresholds
+  confidence_threshold: 0.5  # Minimum confidence for intent matching
+  ambiguity_threshold: 0.3  # If top 2 intents are within this, ask for clarification
+  
+  # Intent definitions
+  intents:
+    - name: "open_application"
+      examples:
+        - "open {app_name}"
+        - "launch {app_name}"
+        - "start {app_name}"
+    
+    - name: "search_web"
+      examples:
+        - "search for {query}"
+        - "google {query}"
+        - "look up {query}"
+    
+    - name: "set_reminder"
+      examples:
+        - "remind me to {task} at {time}"
+        - "set a reminder for {task}"
+    
+    - name: "get_weather"
+      examples:
+        - "what's the weather"
+        - "weather forecast"
+        - "is it going to rain"
+    
+    - name: "control_volume"
+      examples:
+        - "set volume to {level}"
+        - "turn it up"
+        - "mute"
+    
+    # TODO: Add more intents as capabilities expand
+
+# -----------------------------------------------------------------------------
+# System Agent Configuration
+# -----------------------------------------------------------------------------
+system:
+  # macOS integration settings
+  macos:
+    use_applescript: true
+    use_shortcuts: true
+    
+    # Allowed applications (whitelist, empty = all allowed)
+    allowed_apps: []
+    
+    # Blocked applications (blacklist)
+    blocked_apps:
+      - "Terminal"  # Prevent potentially dangerous terminal access
+    
+    # System commands that require confirmation
+    confirm_actions:
+      - "shutdown"
+      - "restart"
+      - "logout"
+      - "delete"
+  
+  # External API access
+  apis:
+    weather:
+      provider: "openweathermap"
+      # API key should be in environment: OPENWEATHERMAP_API_KEY
+      default_location: "auto"  # 'auto' uses IP geolocation
+    
+    # TODO: Add more API configurations
+
+# -----------------------------------------------------------------------------
+# Memory Agent Configuration
+# -----------------------------------------------------------------------------
+memory:
+  # Storage backend: 'sqlite', 'redis', 'memory'
+  backend: "sqlite"
+  
+  # SQLite settings
+  sqlite:
+    database_path: "data/memory.db"
+  
+  # Memory limits
+  short_term:
+    max_items: 100
+    ttl_seconds: 3600  # 1 hour
+  
+  long_term:
+    max_items: 10000
+    # No TTL for long-term memory
+  
+  # Conversation memory
+  conversation:
+    max_turns: 20  # Remember last N conversation turns
+    summarize_after: 10  # Summarize context after N turns
+  
+  # Vector store for semantic search (future)
+  # TODO: Add vector database configuration
+  vector_store:
+    enabled: false
+    provider: "chroma"  # 'chroma', 'pinecone', 'weaviate'
+
+# -----------------------------------------------------------------------------
+# Orchestrator Configuration
+# -----------------------------------------------------------------------------
+orchestrator:
+  # Agent startup order (dependencies)
+  startup_order:
+    - "memory_agent"
+    - "system_agent"
+    - "intent_agent"
+    - "voice_agent"
+  
+  # Health check interval in seconds
+  health_check_interval: 30
+  
+  # Task timeout in seconds
+  default_task_timeout: 30
+  
+  # Retry settings
+  max_retries: 3
+  retry_delay_seconds: 1
+  
+  # Graceful shutdown timeout
+  shutdown_timeout_seconds: 10
+
+# -----------------------------------------------------------------------------
+# Event Bus Configuration
+# -----------------------------------------------------------------------------
+event_bus:
+  # Queue size for async event processing
+  max_queue_size: 1000
+  
+  # Event persistence for debugging
+  persist_events: false
+  event_log_path: "data/events.log"
+  
+  # Metrics
+  enable_metrics: true
+
+# -----------------------------------------------------------------------------
+# Security Settings
+# -----------------------------------------------------------------------------
+security:
+  # API key management
+  # All API keys should be in environment variables, not in this file
+  
+  # Command execution safety
+  sandbox_commands: true
+  max_command_length: 500
+  
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    max_requests_per_minute: 60
+
+# -----------------------------------------------------------------------------
+# Future: UI Configuration (placeholder)
+# -----------------------------------------------------------------------------
+# TODO: Add HUD UI settings when UI agent is implemented
+ui:
+  enabled: false
+  hud:
+    position: "top-right"
+    opacity: 0.9
+    theme: "dark"
+
+# -----------------------------------------------------------------------------
+# Future: OpenCV Configuration (placeholder)
+# -----------------------------------------------------------------------------
+# TODO: Add computer vision settings when OpenCV agent is implemented
+vision:
+  enabled: false
+  camera_id: 0
+  resolution: [1280, 720]
+  fps: 30

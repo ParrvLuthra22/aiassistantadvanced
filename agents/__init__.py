@@ -1,0 +1,29 @@
+"""
+JARVIS Virtual Assistant - Agents Package.
+
+This package contains all agent implementations:
+    - BaseAgent: Abstract base class for all agents
+    - VoiceAgent: Speech recognition and synthesis
+    - IntentAgent: Natural language understanding
+    - SystemAgent: macOS system integration
+    - MemoryAgent: Context and history management
+
+Each agent is an independent unit that communicates via the EventBus.
+"""
+
+from agents.base_agent import BaseAgent, AgentCapability, AgentState, AgentMetrics
+from agents.voice_agent import VoiceAgent
+from agents.intent_agent import IntentAgent
+from agents.system_agent import SystemAgent
+from agents.memory_agent import MemoryAgent
+
+__all__ = [
+    "BaseAgent",
+    "AgentCapability",
+    "AgentState",
+    "AgentMetrics",
+    "VoiceAgent",
+    "IntentAgent",
+    "SystemAgent",
+    "MemoryAgent",
+]

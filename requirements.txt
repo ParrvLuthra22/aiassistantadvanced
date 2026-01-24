@@ -1,0 +1,78 @@
+# ==============================================================================
+# JARVIS Virtual Assistant - Requirements
+# ==============================================================================
+# Core dependencies for the virtual assistant
+# Install with: pip install -r requirements.txt
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Core Dependencies
+# ------------------------------------------------------------------------------
+pyyaml>=6.0              # Configuration file parsing
+
+# ------------------------------------------------------------------------------
+# Voice & Speech - FREE, LOCAL options
+# ------------------------------------------------------------------------------
+# Wake word detection (Vosk - FREE, offline)
+vosk>=0.3.45             # Vosk speech recognition for wake word detection
+
+# Microphone capture
+pyaudio>=0.2.14          # Audio capture from microphone
+
+# Text-to-Speech (pyttsx3 - FREE, offline, uses native macOS voices)
+pyttsx3>=2.90            # Offline TTS using system voices
+
+# Optional: SpeechRecognition fallback (uses Google free API)
+SpeechRecognition>=3.10.0  # Fallback STT with free Google API
+
+# NOTE: whisper.cpp must be installed separately:
+# 1. git clone https://github.com/ggerganov/whisper.cpp
+# 2. cd whisper.cpp && make
+# 3. Download model: bash ./models/download-ggml-model.sh base.en
+
+# ------------------------------------------------------------------------------
+# AI / LLM (for intent recognition)
+# ------------------------------------------------------------------------------
+google-genai>=1.0.0          # Google Gemini API for intent recognition
+# Optional: Enhanced TTS
+# ------------------------------------------------------------------------------
+# elevenlabs>=0.2.0       # ElevenLabs TTS (high quality voices)
+# azure-cognitiveservices-speech>=1.30.0  # Azure TTS
+
+# ------------------------------------------------------------------------------
+# Optional: Wake Word Detection
+# ------------------------------------------------------------------------------
+# pvporcupine>=3.0.0      # Picovoice Porcupine wake word detection
+
+# ------------------------------------------------------------------------------
+# Optional: Audio Processing
+# ------------------------------------------------------------------------------
+# pyaudio>=0.2.13         # Audio I/O (requires PortAudio)
+# numpy>=1.24.0           # Numerical operations for audio
+# sounddevice>=0.4.6      # Alternative audio I/O
+
+# ------------------------------------------------------------------------------
+# Future: Computer Vision
+# ------------------------------------------------------------------------------
+# opencv-python>=4.8.0    # OpenCV for computer vision
+# mediapipe>=0.10.0       # MediaPipe for hand/face tracking
+
+# ------------------------------------------------------------------------------
+# Future: Vector Database (for semantic memory)
+# ------------------------------------------------------------------------------
+# chromadb>=0.4.0         # ChromaDB for vector storage
+# sentence-transformers>=2.2.0  # For generating embeddings
+
+# ------------------------------------------------------------------------------
+# Development Dependencies
+# ------------------------------------------------------------------------------
+# pytest>=7.0.0           # Testing framework
+# pytest-asyncio>=0.21.0  # Async test support
+# black>=23.0.0           # Code formatting
+# ruff>=0.1.0             # Fast linting
+# mypy>=1.0.0             # Type checking
+
+# ------------------------------------------------------------------------------
+# Optional: Better Console Output
+# ------------------------------------------------------------------------------
+colorama>=0.4.6          # Cross-platform colored terminal output
