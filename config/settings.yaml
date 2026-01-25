@@ -18,16 +18,63 @@ general:
   assistant_name: "JARVIS"
   version: "0.1.0"
   
-  # Logging configuration
-  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # -------------------------------------------------------------------------
+  # Logging Configuration
+  # -------------------------------------------------------------------------
+  # Log levels: TRACE, DEBUG, INFO, EVENT, WARNING, ERROR, CRITICAL
+  # TRACE: Most verbose, shows internal operations
+  # DEBUG: Detailed information for debugging
+  # INFO: General operational messages
+  # EVENT: Event bus traffic (custom level between INFO and WARNING)
+  # WARNING: Warnings and potential issues
+  # ERROR: Error conditions
+  # CRITICAL: Critical failures
+  log_level: "INFO"
+  
+  # Log format for human-readable console/file output
+  # Available fields: %(asctime)s, %(levelname)s, %(name)s, %(message)s,
+  #                   %(module)s, %(funcName)s, %(lineno)d
   log_format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  
+  # Log file path (relative to project root)
+  # Set to null/empty to disable file logging
   log_file: "logs/jarvis.log"
-  log_rotation: "daily"  # daily, size, none
+  
+  # Log rotation strategy: daily, size, none
+  log_rotation: "daily"
+  
+  # Maximum log file size in MB (for size-based rotation)
   log_max_size_mb: 10
+  
+  # Number of backup log files to keep
   log_backup_count: 7
   
-  # Debug mode enables verbose logging and additional checks
+  # -------------------------------------------------------------------------
+  # Debug Mode
+  # -------------------------------------------------------------------------
+  # Debug mode enables:
+  # - Log level set to DEBUG
+  # - Full event payloads logged (not just summaries)
+  # - Additional internal state logging
+  # - Performance timing for all operations
+  # Can also be enabled via: JARVIS_DEBUG=1 environment variable
   debug_mode: false
+  
+  # -------------------------------------------------------------------------
+  # Structured Logging (Machine-Readable)
+  # -------------------------------------------------------------------------
+  # Enable JSON-formatted logs for file output
+  # JSON logs are written to logs/jarvis.json.log alongside human-readable logs
+  # Useful for log aggregation (ELK, Loki, Splunk, CloudWatch)
+  json_logs: false
+  
+  # -------------------------------------------------------------------------
+  # Event Tracing
+  # -------------------------------------------------------------------------
+  # Enable event tracing for debugging event flow across agents
+  # Records: event emissions, receipts, and handling with timing
+  # Access via: EventTracer.get_instance().dump_text()
+  event_tracing: true
 
 # -----------------------------------------------------------------------------
 # Voice Agent Configuration
@@ -225,6 +272,7 @@ orchestrator:
     - "system_agent"
     - "intent_agent"
     - "voice_agent"
+    - "vision_agent"  # Optional: only started if vision.enabled = true
   
   # Health check interval in seconds
   health_check_interval: 30
@@ -281,11 +329,134 @@ ui:
     theme: "dark"
 
 # -----------------------------------------------------------------------------
-# Future: OpenCV Configuration (placeholder)
+# Vision Agent Configuration
 # -----------------------------------------------------------------------------
-# TODO: Add computer vision settings when OpenCV agent is implemented
+# Computer vision capabilities using OpenCV and MediaPipe
+# Provides gesture recognition and face detection/recognition
+# 
+# Required dependencies:
+#   pip install opencv-python mediapipe face-recognition numpy
+#
+# Note: face-recognition requires dlib which needs cmake:
+#   brew install cmake (macOS)
+# -----------------------------------------------------------------------------
 vision:
-  enabled: false
-  camera_id: 0
-  resolution: [1280, 720]
-  fps: 30
+  # Enable/disable the VisionAgent
+  # Set to true to enable camera-based gesture and face recognition
+  enabled: true
+  
+  # -------------------------------------------------------------------------
+  # Camera Settings
+  # -------------------------------------------------------------------------
+  camera:
+    # Camera device ID (0 = default camera, 1 = secondary, etc.)
+    device_id: 0
+    
+    # Capture resolution [width, height]
+    # Higher resolution = better recognition but slower processing
+    resolution: [1280, 720]
+    
+    # Target frames per second
+    # Lower FPS = less CPU usage
+    fps: 30
+    
+    # Capture loop interval in milliseconds
+    # How often to capture and process a frame
+    capture_interval_ms: 100
+    
+    # Auto-start camera when VisionAgent starts
+    # If false, camera starts only when "start vision" command is given
+    auto_start: false
+    
+    # Show preview window with camera feed and detections
+    # Set to true to see a window with hand/face tracking visualizations
+    show_preview: true
+  
+  # -------------------------------------------------------------------------
+  # Gesture Recognition (MediaPipe Hands)
+  # -------------------------------------------------------------------------
+  gestures:
+    # Enable gesture detection
+    enabled: true
+    
+    # Minimum detection confidence (0.0 - 1.0)
+    # Higher = fewer false positives but may miss some gestures
+    min_detection_confidence: 0.7
+    
+    # Minimum tracking confidence (0.0 - 1.0)
+    min_tracking_confidence: 0.5
+    
+    # Maximum number of hands to detect
+    max_num_hands: 2
+    
+    # Cooldown between same gesture detections (seconds)
+    # Prevents rapid-fire events for the same gesture
+    cooldown_seconds: 1.0
+    
+    # Supported gestures and their actions
+    # Each gesture can trigger a specific action
+    gesture_actions:
+      thumbs_up: "confirm"      # Confirmation gesture
+      thumbs_down: "cancel"     # Cancellation gesture
+      open_palm: "stop"         # Stop/pause gesture
+      fist: "dismiss"           # Dismiss notification
+      peace: "screenshot"       # Take screenshot
+      wave: "greeting"          # Greeting gesture
+      pointing: "select"        # Selection/pointing gesture
+  
+  # -------------------------------------------------------------------------
+  # Face Recognition
+  # -------------------------------------------------------------------------
+  face:
+    # Enable face detection and recognition
+    enabled: true
+    
+    # Use MediaPipe Face Detection (lightweight, always-on)
+    use_mediapipe: true
+    
+    # Enable face recognition (requires face_recognition library)
+    # This identifies specific people, not just detects faces
+    enable_recognition: true
+    
+    # Minimum detection confidence for face detection
+    min_detection_confidence: 0.5
+    
+    # Face recognition tolerance (lower = stricter matching)
+    # Range: 0.0 - 1.0, recommended: 0.4 - 0.6
+    recognition_tolerance: 0.5
+    
+    # Directory to store enrolled face data
+    enrolled_faces_dir: "data/faces"
+    
+    # Cooldown between face detection events (seconds)
+    detection_cooldown_seconds: 5.0
+    
+    # Cooldown between recognition events for same person (seconds)
+    recognition_cooldown_seconds: 30.0
+  
+  # -------------------------------------------------------------------------
+  # Performance Settings
+  # -------------------------------------------------------------------------
+  performance:
+    # Downscale frames for processing (1.0 = no scaling)
+    # Lower values = faster but less accurate
+    processing_scale: 0.5
+    
+    # Use GPU acceleration if available
+    use_gpu: false
+    
+    # Number of threads for processing
+    num_threads: 2
+  
+  # -------------------------------------------------------------------------
+  # Privacy Settings
+  # -------------------------------------------------------------------------
+  privacy:
+    # Do not store any images to disk
+    no_image_storage: true
+    
+    # Blur faces in any saved images/screenshots
+    blur_faces_in_storage: true
+    
+    # Only process when explicitly started (not on boot)
+    require_explicit_start: true

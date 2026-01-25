@@ -531,6 +531,172 @@ class SystemNotificationEvent(BaseEvent):
 
 
 # =============================================================================
+# Vision Events - Gesture detection, face recognition, visual commands
+# =============================================================================
+
+@dataclass(frozen=True)
+class VisionStartEvent(BaseEvent):
+    """
+    Event to start the vision system.
+    
+    Attributes:
+        enable_gestures: Enable gesture detection
+        enable_faces: Enable face detection/recognition
+        camera_id: Camera device ID (0 = default)
+    """
+    
+    enable_gestures: bool = True
+    enable_faces: bool = True
+    camera_id: int = 0
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
+class VisionStopEvent(BaseEvent):
+    """Event to stop the vision system."""
+    
+    reason: str = ""
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
+class GestureDetectedEvent(BaseEvent):
+    """
+    Event emitted when a hand gesture is detected.
+    
+    Supported gestures:
+        - THUMBS_UP: Approval, confirm
+        - THUMBS_DOWN: Disapproval, cancel
+        - WAVE: Greeting, attention
+        - STOP: Stop, pause
+        - POINT: Pointing direction
+        - FIST: Grab, select
+        - OPEN_PALM: Release, clear
+        - PEACE: Victory sign
+        - OK: Okay gesture (thumb and index circle)
+        - ONE, TWO, THREE, FOUR, FIVE: Finger counting
+    
+    Attributes:
+        gesture: The detected gesture name
+        confidence: Detection confidence (0.0 to 1.0)
+        hand: Which hand ('left', 'right', 'both')
+        landmarks: Optional hand landmark positions
+        bounding_box: Bounding box of the hand region
+    """
+    
+    gesture: str = ""
+    confidence: float = 0.0
+    hand: str = "right"
+    landmarks: Dict[str, Any] = field(default_factory=dict)
+    bounding_box: Dict[str, float] = field(default_factory=dict)
+    source: str = field(default="VisionAgent")
+
+
+@dataclass(frozen=True)
+class FaceDetectedEvent(BaseEvent):
+    """
+    Event emitted when a face is detected.
+    
+    Attributes:
+        face_id: Unique identifier for tracking this face
+        is_recognized: Whether the face was recognized (known person)
+        person_name: Name of recognized person (if is_recognized)
+        confidence: Recognition confidence (0.0 to 1.0)
+        bounding_box: Bounding box of the face region
+        landmarks: Facial landmark positions (eyes, nose, mouth)
+        emotion: Detected emotion (if enabled)
+        is_looking: Whether person is looking at camera
+    """
+    
+    face_id: str = ""
+    is_recognized: bool = False
+    person_name: str = ""
+    confidence: float = 0.0
+    bounding_box: Dict[str, float] = field(default_factory=dict)
+    landmarks: Dict[str, Any] = field(default_factory=dict)
+    emotion: str = ""
+    is_looking: bool = False
+    source: str = field(default="VisionAgent")
+
+
+@dataclass(frozen=True)
+class FaceLostEvent(BaseEvent):
+    """
+    Event emitted when a tracked face is no longer visible.
+    
+    Attributes:
+        face_id: The face ID that was lost
+        duration_seconds: How long the face was tracked
+    """
+    
+    face_id: str = ""
+    duration_seconds: float = 0.0
+    source: str = field(default="VisionAgent")
+
+
+@dataclass(frozen=True)
+class VisionCommandEvent(BaseEvent):
+    """
+    Event to request a specific vision action.
+    
+    Commands:
+        - capture_frame: Capture a single frame
+        - recognize_face: Attempt to recognize current face
+        - learn_face: Learn a new face with given name
+        - list_known_faces: List all known face names
+        - toggle_gestures: Enable/disable gesture detection
+        - toggle_faces: Enable/disable face detection
+    
+    Attributes:
+        command: The command to execute
+        parameters: Command-specific parameters
+    """
+    
+    command: str = ""
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
+class VisionCommandResultEvent(BaseEvent):
+    """
+    Result of a vision command.
+    
+    Attributes:
+        command: The original command
+        success: Whether the command succeeded
+        result: Command result data
+        error: Error message if failed
+    """
+    
+    command: str = ""
+    success: bool = False
+    result: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
+    source: str = field(default="VisionAgent")
+
+
+@dataclass(frozen=True)
+class PresenceChangedEvent(BaseEvent):
+    """
+    Event emitted when user presence changes.
+    
+    Triggered when user appears/disappears from camera view.
+    Useful for auto-wake, screen lock, etc.
+    
+    Attributes:
+        is_present: Whether a user is now present
+        face_count: Number of faces currently visible
+        duration_absent: Seconds since last presence (if becoming present)
+    """
+    
+    is_present: bool = False
+    face_count: int = 0
+    duration_absent: float = 0.0
+    source: str = field(default="VisionAgent")
+
+
+# =============================================================================
 # Memory Events - Context and history management
 # =============================================================================
 
@@ -730,6 +896,16 @@ EVENT_REGISTRY: Dict[str, type] = {
     "SystemCommandResultEvent": SystemCommandResultEvent,
     "ApplicationLaunchedEvent": ApplicationLaunchedEvent,
     "SystemNotificationEvent": SystemNotificationEvent,
+    # Vision events
+    "VisionStartEvent": VisionStartEvent,
+    "VisionStopEvent": VisionStopEvent,
+    "GestureDetectedEvent": GestureDetectedEvent,
+    "FaceDetectedEvent": FaceDetectedEvent,
+    "FaceLostEvent": FaceLostEvent,
+    "VisionCommandEvent": VisionCommandEvent,
+    "VisionCommandResultEvent": VisionCommandResultEvent,
+    "PresenceChangedEvent": PresenceChangedEvent,
+    # Memory events
     "MemoryStoreEvent": MemoryStoreEvent,
     "MemoryQueryEvent": MemoryQueryEvent,
     "MemoryQueryResultEvent": MemoryQueryResultEvent,

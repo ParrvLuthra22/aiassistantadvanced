@@ -288,6 +288,49 @@ DEFAULT_INTENTS = [
         required_slots=["action"],  # lock, sleep, restart, shutdown
         handler_agent="system_agent",
     ),
+    
+    # Vision Control
+    IntentDefinition(
+        name="START_VISION",
+        description="Start the camera and enable gesture/face recognition",
+        examples=[
+            "start vision",
+            "enable vision",
+            "turn on the camera",
+            "start camera",
+            "enable gesture recognition",
+            "start face detection",
+            "activate vision",
+        ],
+        handler_agent="vision_agent",
+    ),
+    IntentDefinition(
+        name="STOP_VISION",
+        description="Stop the camera and disable gesture/face recognition",
+        examples=[
+            "stop vision",
+            "disable vision",
+            "turn off the camera",
+            "stop camera",
+            "disable gesture recognition",
+            "stop face detection",
+            "deactivate vision",
+        ],
+        handler_agent="vision_agent",
+    ),
+    IntentDefinition(
+        name="ENROLL_FACE",
+        description="Enroll a person's face for recognition",
+        examples=[
+            "enroll my face",
+            "save my face as John",
+            "remember my face",
+            "add face for Alice",
+            "register face",
+        ],
+        optional_slots=["name"],
+        handler_agent="vision_agent",
+    ),
 ]
 
 
@@ -864,6 +907,7 @@ class IntentAgent(BaseAgent):
             "System": ["GET_SYSTEM_STATS", "GET_TIME", "SYSTEM_CONTROL"],
             "Web": ["SEARCH_WEB", "OPEN_URL"],
             "Controls": ["CONTROL_VOLUME", "CONTROL_BRIGHTNESS"],
+            "Vision": ["START_VISION", "STOP_VISION", "ENROLL_FACE"],
             "Reminders": ["SET_REMINDER"],
             "General": ["GENERAL_QUESTION", "HELP"],
         }

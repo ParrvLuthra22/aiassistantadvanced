@@ -236,6 +236,11 @@ class FallbackPatterns:
     
     # Keyword to intent mapping (order matters - first match wins)
     KEYWORD_PATTERNS = [
+        # Vision control (must come before app control to prevent "start vision" -> OPEN_APP)
+        (["start vision", "enable vision", "vision on", "turn on vision", "activate vision", "start camera", "enable camera"], "START_VISION", []),
+        (["stop vision", "disable vision", "vision off", "turn off vision", "deactivate vision", "stop camera", "disable camera"], "STOP_VISION", []),
+        (["enroll face", "enroll my face", "save my face", "remember my face", "register my face", "add my face", "save face", "remember face", "register face", "add face", "learn my face", "learn face"], "ENROLL_FACE", ["name"]),
+        
         # App control
         (["open", "launch", "start", "run"], "OPEN_APP", ["app"]),
         (["close", "quit", "exit", "kill"], "CLOSE_APP", ["app"]),
@@ -402,7 +407,44 @@ class FallbackPatterns:
             if level_match:
                 entities["level"] = int(level_match.group(1))
         
+        elif intent == "ENROLL_FACE":
+            # Extract name for face enrollment
+            # Patterns like "enroll my face as John" or "save my face as Sarah"
+            import re
+            # Match "as <name>" pattern
+            name_match = re.search(r'\bas\s+([a-zA-Z][a-zA-Z\s]*?)(?:\.|,|$)', segment, re.IGNORECASE)
+            if name_match:
+                name = name_match.group(1).strip().rstrip('.')
+                name = cls._normalize_user_name(name)
+                entities["name"] = name
+            # Also try "for <name>" pattern
+            elif "for " in segment:
+                for_match = re.search(r'\bfor\s+([a-zA-Z][a-zA-Z\s]*?)(?:\.|,|$)', segment, re.IGNORECASE)
+                if for_match:
+                    name = for_match.group(1).strip().rstrip('.')
+                    name = cls._normalize_user_name(name)
+                    entities["name"] = name
+        
         return entities
+    
+    @classmethod
+    def _normalize_user_name(cls, name: str) -> str:
+        """Normalize user name, fixing common transcription errors."""
+        # Common transcription corrections
+        name_corrections = {
+            "purv": "Parrv",
+            "perv": "Parrv",
+            "parv": "Parrv",
+            "prav": "Parrv",
+            "prev": "Parrv",
+        }
+        
+        name_lower = name.lower().strip()
+        if name_lower in name_corrections:
+            return name_corrections[name_lower]
+        
+        # Default: capitalize properly
+        return name.title()
     
     @classmethod
     def _normalize_app_name(cls, name: str) -> str:

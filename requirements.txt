@@ -9,6 +9,7 @@
 # Core Dependencies
 # ------------------------------------------------------------------------------
 pyyaml>=6.0              # Configuration file parsing
+python-dotenv>=1.0.0     # Load environment variables from .env file
 
 # ------------------------------------------------------------------------------
 # Voice & Speech - FREE, LOCAL options

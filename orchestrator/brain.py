@@ -52,6 +52,14 @@ from agents.voice_agent import VoiceAgent
 from agents.intent_agent import IntentAgent
 from agents.system_agent import SystemAgent
 from agents.memory_agent import MemoryAgent
+
+# VisionAgent is optional - only import if vision dependencies are available
+try:
+    from agents.vision_agent import VisionAgent
+    VISION_AVAILABLE = True
+except ImportError:
+    VisionAgent = None  # type: ignore
+    VISION_AVAILABLE = False
 from schemas.events import (
     ActionRequestEvent,
     ActionResultEvent,
@@ -458,6 +466,20 @@ INTENT_ROUTING: Dict[str, Dict[str, Any]] = {
     
     # General questions (future: route to LLM agent)
     "GENERAL_QUESTION": {"agent": "Brain", "action": "respond"},
+    
+    # ==========================================================================
+    # Vision intents -> VisionAgent
+    # ==========================================================================
+    "toggle_vision": {"agent": "VisionAgent", "action": "toggle_vision"},
+    "start_vision": {"agent": "VisionAgent", "action": "toggle_vision"},
+    "stop_vision": {"agent": "VisionAgent", "action": "toggle_vision"},
+    "enroll_face": {"agent": "VisionAgent", "action": "enroll_face"},
+    "recognize_face": {"agent": "VisionAgent", "action": "recognize_face"},
+    "TOGGLE_VISION": {"agent": "VisionAgent", "action": "toggle_vision"},
+    "START_VISION": {"agent": "VisionAgent", "action": "toggle_vision"},
+    "STOP_VISION": {"agent": "VisionAgent", "action": "toggle_vision"},
+    "ENROLL_FACE": {"agent": "VisionAgent", "action": "enroll_face"},
+    "RECOGNIZE_FACE": {"agent": "VisionAgent", "action": "recognize_face"},
 }
 
 
@@ -787,6 +809,7 @@ class Brain:
         intent_config = self._config.get("intent", {})
         system_config = self._config.get("system", {})
         memory_config = self._config.get("memory", {})
+        vision_config = self._config.get("vision", {})
         
         # Create and register agents
         agents = [
@@ -795,6 +818,19 @@ class Brain:
             IntentAgent(config={"intent": intent_config}),
             VoiceAgent(config={"voice": voice_config}),
         ]
+        
+        # Conditionally add VisionAgent if enabled and available
+        if vision_config.get("enabled", False):
+            if VISION_AVAILABLE:
+                agents.append(VisionAgent(config={"vision": vision_config}))
+                logger.info("VisionAgent registered (vision enabled)")
+            else:
+                logger.warning(
+                    "Vision is enabled in config but dependencies are not installed. "
+                    "Install with: pip install opencv-python mediapipe face-recognition numpy"
+                )
+        else:
+            logger.debug("VisionAgent not registered (vision disabled in config)")
         
         for agent in agents:
             self.register_agent(agent)

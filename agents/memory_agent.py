@@ -347,32 +347,56 @@ class MemoryAgent(BaseAgent):
     - Generate responses
     """
     
-    def __init__(self, event_bus: EventBus, db_path: Optional[Path] = None):
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        event_bus: Optional[EventBus] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(
-            name="MemoryAgent",
+            name=name or "MemoryAgent",
             event_bus=event_bus,
-            capabilities=[
-                AgentCapability.MEMORY_STORAGE,
-                AgentCapability.CONTEXT_TRACKING,
-            ]
+            config=config,
         )
         
-        self.db_path = db_path or Path("data/memory.db")
+        # Get db_path from config or use default
+        memory_config = (config or {}).get("memory", {})
+        db_path_str = memory_config.get("db_path", "data/memory.db")
+        self.db_path = Path(db_path_str)
+        
         self.store: Optional[MemoryStore] = None
         self._last_cleanup = 0.0
         self._conversation_turn = 0
+    
+    @property
+    def capabilities(self) -> List[AgentCapability]:
+        """Return agent capabilities."""
+        return [
+            AgentCapability(
+                name="memory_storage",
+                description="Store and retrieve short-term and long-term memory",
+                input_events=["MemoryStoreEvent", "MemoryQueryEvent"],
+                output_events=["MemoryQueryResultEvent"],
+            ),
+            AgentCapability(
+                name="context_tracking",
+                description="Track conversation context and user patterns",
+                input_events=["VoiceInputEvent", "IntentRecognizedEvent"],
+                output_events=[],
+            ),
+        ]
     
     async def _setup(self) -> None:
         """Initialize memory store and subscriptions."""
         self.store = MemoryStore(self.db_path)
         
         # Subscribe to memory events
-        await self.subscribe(MemoryStoreEvent, self._handle_store)
-        await self.subscribe(MemoryQueryEvent, self._handle_query)
+        self._subscribe(MemoryStoreEvent, self._handle_store)
+        self._subscribe(MemoryQueryEvent, self._handle_query)
         
         # Subscribe for automatic context tracking
-        await self.subscribe(VoiceInputEvent, self._handle_voice_input)
-        await self.subscribe(IntentRecognizedEvent, self._handle_intent)
+        self._subscribe(VoiceInputEvent, self._handle_voice_input)
+        self._subscribe(IntentRecognizedEvent, self._handle_intent)
         
         # Initial cleanup
         if self.store:

@@ -16,12 +16,15 @@ Features:
     - Full async/await support with thread-safe operations
     - Priority-based event processing
     - Comprehensive logging for every emitted and handled event
+    - Event tracing for observability (via EventTracer)
     - Event history for debugging and replay
     - Metrics tracking for performance monitoring
 
-TODO: Add event persistence for replay/debugging
-TODO: Add dead letter queue for failed event handling
-TODO: Add distributed event bus support for multi-process agents
+Observability:
+    - All events are logged with structured context
+    - EventTracer records event flow across agents
+    - JSON logs available for machine parsing
+    - Correlation IDs for request tracing
 """
 
 from __future__ import annotations
@@ -37,6 +40,13 @@ from typing import Any, Awaitable, Callable, Dict, Deque, List, Optional, Set, T
 from uuid import UUID, uuid4
 
 from schemas.events import BaseEvent, EventPriority
+
+# Import EventTracer for observability
+try:
+    from utils.logger import EventTracer
+    _tracer_available = True
+except ImportError:
+    _tracer_available = False
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +335,7 @@ class EventBus:
         All handlers for an event are executed concurrently.
         
         Logging: Every emitted event is logged with full context.
+        Event Tracing: Records emission in EventTracer for observability.
         
         Args:
             event: The event to emit
@@ -333,16 +344,24 @@ class EventBus:
             await bus.emit(VoiceInputEvent(text="Hello", source="voice_agent"))
         """
         event_type = event.type
+        event_id = str(event.event_id)
         self._metrics.record_publish(event_type)
         
         # Log the emission with full context
         logger.info(
             f"[EMIT] Event: {event_type} | "
-            f"ID: {event.event_id} | "
+            f"ID: {event_id} | "
             f"Source: {event.source} | "
             f"Priority: {event.priority.name} | "
             f"Payload: {str(event.payload)[:100]}"
         )
+        
+        # Record in EventTracer for observability
+        if _tracer_available:
+            try:
+                EventTracer.get_instance().record_emit(event_type, event_id, event.source)
+            except Exception:
+                pass  # Don't let tracing errors break event flow
         
         # Record in history
         self._record_event_history(event, "emitted")
@@ -398,12 +417,22 @@ class EventBus:
             - Timing measurement for performance monitoring
             - Error isolation (one failing handler doesn't affect others)
             - Full logging for every handled event
+            - EventTracer integration for observability
         """
         handler_name = handler.__name__
+        event_id = str(event.event_id)
+        event_type = event.type
         start_time = datetime.utcnow()
         
+        # Record receipt in EventTracer
+        if _tracer_available:
+            try:
+                EventTracer.get_instance().record_receive(event_type, event_id, handler_name)
+            except Exception:
+                pass
+        
         try:
-            logger.debug(f"[HANDLE] {handler_name} processing {event.type}")
+            logger.debug(f"[HANDLE] {handler_name} processing {event_type}")
             await handler(event)
             
             # Calculate processing time
@@ -412,24 +441,43 @@ class EventBus:
             
             # Log successful handling
             logger.info(
-                f"[HANDLED] {event.type} by {handler_name} | "
+                f"[HANDLED] {event_type} by {handler_name} | "
                 f"Time: {processing_time_ms:.2f}ms | "
-                f"Event ID: {event.event_id}"
+                f"Event ID: {event_id}"
             )
+            
+            # Record success in EventTracer
+            if _tracer_available:
+                try:
+                    EventTracer.get_instance().record_handle(
+                        event_type, event_id, handler_name, processing_time_ms
+                    )
+                except Exception:
+                    pass
             
             # Record success in history
             self._record_event_history(event, "handled", handler_name)
             
         except Exception as e:
-            self._metrics.record_failure(event.type)
+            processing_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            self._metrics.record_failure(event_type)
             
             # Log the failure with full context
             logger.error(
-                f"[HANDLE_ERROR] Handler '{handler_name}' failed for {event.type} | "
-                f"Event ID: {event.event_id} | "
+                f"[HANDLE_ERROR] Handler '{handler_name}' failed for {event_type} | "
+                f"Event ID: {event_id} | "
                 f"Error: {str(e)}",
                 exc_info=True
             )
+            
+            # Record failure in EventTracer
+            if _tracer_available:
+                try:
+                    EventTracer.get_instance().record_handle(
+                        event_type, event_id, handler_name, processing_time_ms, error=str(e)
+                    )
+                except Exception:
+                    pass
             
             # Record failure in history
             self._record_event_history(event, "failed", handler_name, str(e))
