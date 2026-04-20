@@ -406,6 +406,20 @@ class VoiceAgent(BaseAgent):
             
             if not self._mic_stream.start():
                 self._logger.error(f"Microphone error: {self._mic_stream.error}")
+                try:
+                    devices = self._mic_stream.list_input_devices()
+                    if devices:
+                        self._logger.warning(
+                            "Available input devices: "
+                            + ", ".join(
+                                f"{d['index']}:{d['name']}"
+                                for d in devices
+                            )
+                        )
+                    else:
+                        self._logger.warning("No input devices detected by PyAudio")
+                except Exception as e:
+                    self._logger.warning(f"Failed to enumerate input devices: {e}")
                 self._mic_stream = None
             else:
                 self._logger.info("Microphone initialized")
@@ -495,9 +509,14 @@ class VoiceAgent(BaseAgent):
         
         while self.is_running and not self._shutdown_event.is_set():
             try:
-                # If no wake word detector, use keyboard fallback
-                if not self._wake_word_detector:
+                # If microphone unavailable, use keyboard fallback
+                if not self._mic_stream:
                     await self._keyboard_input_fallback()
+                    continue
+
+                # If no wake word detector, use speech-activated mode
+                if not self._wake_word_detector:
+                    await self._listen_without_wake_word()
                     continue
                 
                 # Wait for wake word detection
@@ -533,6 +552,47 @@ class VoiceAgent(BaseAgent):
             except Exception as e:
                 self._logger.error(f"Error in listen loop: {e}", exc_info=True)
                 await asyncio.sleep(1)  # Back off on error
+
+    async def _listen_without_wake_word(self) -> None:
+        """Listen continuously using VAD when wake word detector is unavailable."""
+        if not self._recorder:
+            await self._keyboard_input_fallback()
+            return
+
+        # Emit listening state only once per cycle
+        await self._event_bus.emit(ListeningStateChangedEvent(
+            is_listening=True,
+            listening_mode="continuous",
+            source="VoiceAgent",
+        ))
+
+        self._set_voice_state(VoiceAgentState.LISTENING_COMMAND)
+        self._recording_complete.clear()
+
+        # Start recording (uses VAD internally)
+        self._recorder.start_recording()
+        if self._audio_buffer:
+            pre_audio = self._audio_buffer.get_last_seconds(self._voice_config.buffer_seconds)
+            if pre_audio:
+                self._recorder.add_chunk(pre_audio)
+
+        self._logger.info("Listening for speech (no wake word detector)")
+
+        try:
+            await asyncio.wait_for(
+                self._recording_complete.wait(),
+                timeout=self._voice_config.max_recording_seconds + 1.0,
+            )
+        except asyncio.TimeoutError:
+            if self._recorder:
+                self._command_audio = self._recorder.stop_recording()
+
+        if self._command_audio and len(self._command_audio) > 0 and self._recorder.has_speech:
+            await self._process_command_audio(self._command_audio)
+        else:
+            self._logger.warning("No speech detected in continuous mode")
+
+        self._command_audio = None
     
     async def _handle_wake_word_detected(self) -> None:
         """Handle wake word detection - start recording user speech."""

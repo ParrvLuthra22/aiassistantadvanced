@@ -37,6 +37,7 @@ import json
 import os
 import pickle
 import platform
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -513,7 +514,7 @@ def _convert_to_hand_landmarks(mp_landmarks) -> HandLandmarks:
 
 def _vision_process_main(
     camera_id: int,
-    running_flag: Value,
+    running_flag: Any,
     event_queue: Queue,
     command_queue: Queue,
     enable_gestures: bool = True,
@@ -557,6 +558,7 @@ def _vision_process_main(
     
     hands = None
     face_detection = None
+    face_detection_backend = "none"
     
     if enable_gestures:
         hands = mp_hands.Hands(
@@ -567,10 +569,17 @@ def _vision_process_main(
         )
     
     if enable_faces:
-        face_detection = mp_face_detection.FaceDetection(
-            model_selection=0,
-            min_detection_confidence=0.5,
-        )
+        try:
+            face_detection = mp_face_detection.FaceDetection(
+                model_selection=0,
+                min_detection_confidence=0.5,
+            )
+            face_detection_backend = "mediapipe"
+        except Exception as e:
+            logger.warning(f"MediaPipe FaceDetection init failed, falling back: {e}")
+            face_detection = None
+            if FACE_RECOGNITION_AVAILABLE:
+                face_detection_backend = "face_recognition"
     
     # State
     gesture_recognizer = GestureRecognizer()
@@ -634,55 +643,86 @@ def _vision_process_main(
                                 })
             
             # Process faces
-            if enable_faces and face_detection and frame_count % 3 == 0:
-                results = face_detection.process(rgb_frame)
+            if enable_faces and frame_count % 3 == 0:
                 faces_detected = False
-                
-                if results.detections:
-                    faces_detected = True
-                    h, w = display_frame.shape[:2]
-                    
-                    # Try to recognize faces if face_recognition is available
-                    face_names = []
-                    if FACE_RECOGNITION_AVAILABLE and face_manager.has_faces():
-                        try:
-                            # Find face locations and encodings
-                            face_locations = face_recognition.face_locations(rgb_frame)
-                            if face_locations:
-                                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-                                
-                                for encoding in face_encodings:
-                                    # Try to identify the face
-                                    name, confidence = face_manager.identify_face(encoding)
+                h, w = display_frame.shape[:2]
+
+                if face_detection is not None:
+                    try:
+                        results = face_detection.process(rgb_frame)
+                        if results.detections:
+                            faces_detected = True
+
+                            # Try to recognize faces if face_recognition is available
+                            face_names = []
+                            if FACE_RECOGNITION_AVAILABLE and face_manager.has_faces():
+                                try:
+                                    face_locations = face_recognition.face_locations(rgb_frame)
+                                    if face_locations:
+                                        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+
+                                        for encoding in face_encodings:
+                                            name, confidence = face_manager.identify_face(encoding)
+                                            if name:
+                                                face_names.append(name)
+                                            else:
+                                                face_names.append("Unknown")
+                                except Exception as e:
+                                    logger.warning(f"Face recognition error: {e}")
+
+                            for idx, detection in enumerate(results.detections):
+                                bbox = detection.location_data.relative_bounding_box
+                                x = int(bbox.xmin * w)
+                                y = int(bbox.ymin * h)
+                                bw = int(bbox.width * w)
+                                bh = int(bbox.height * h)
+
+                                # Get name for this face (if recognized)
+                                face_label = "Face"
+                                if idx < len(face_names):
+                                    face_label = face_names[idx]
+
+                                # Draw bounding box - use different color for recognized faces
+                                if face_label != "Face" and face_label != "Unknown":
+                                    color = (0, 255, 255)  # Yellow for recognized
+                                else:
+                                    color = (0, 255, 0)  # Green for unknown
+
+                                cv2.rectangle(display_frame, (x, y), (x + bw, y + bh), color, 2)
+                                cv2.putText(display_frame, face_label, (x, y - 10),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    except Exception as e:
+                        logger.warning(f"MediaPipe face processing failed, switching fallback: {e}")
+                        face_detection = None
+                        if FACE_RECOGNITION_AVAILABLE:
+                            face_detection_backend = "face_recognition"
+
+                if face_detection is None and FACE_RECOGNITION_AVAILABLE and face_detection_backend == "face_recognition":
+                    try:
+                        face_locations = face_recognition.face_locations(rgb_frame)
+                        if face_locations:
+                            faces_detected = True
+                            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+
+                            for idx, (top, right, bottom, left) in enumerate(face_locations):
+                                x = max(0, left)
+                                y = max(0, top)
+                                bw = max(0, right - left)
+                                bh = max(0, bottom - top)
+
+                                face_label = "Unknown"
+                                if idx < len(face_encodings) and face_manager.has_faces():
+                                    name, _confidence = face_manager.identify_face(face_encodings[idx])
                                     if name:
-                                        face_names.append(name)
-                                    else:
-                                        face_names.append("Unknown")
-                        except Exception as e:
-                            logger.warning(f"Face recognition error: {e}")
-                    
-                    for idx, detection in enumerate(results.detections):
-                        bbox = detection.location_data.relative_bounding_box
-                        x = int(bbox.xmin * w)
-                        y = int(bbox.ymin * h)
-                        bw = int(bbox.width * w)
-                        bh = int(bbox.height * h)
-                        
-                        # Get name for this face (if recognized)
-                        face_label = "Face"
-                        if idx < len(face_names):
-                            face_label = face_names[idx]
-                        
-                        # Draw bounding box - use different color for recognized faces
-                        if face_label != "Face" and face_label != "Unknown":
-                            color = (0, 255, 255)  # Yellow for recognized
-                        else:
-                            color = (0, 255, 0)  # Green for unknown
-                        
-                        cv2.rectangle(display_frame, (x, y), (x + bw, y + bh), color, 2)
-                        cv2.putText(display_frame, face_label, (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                
+                                        face_label = name
+
+                                color = (0, 255, 255) if face_label != "Unknown" else (0, 255, 0)
+                                cv2.rectangle(display_frame, (x, y), (x + bw, y + bh), color, 2)
+                                cv2.putText(display_frame, face_label, (x, y - 10),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    except Exception as e:
+                        logger.warning(f"face_recognition fallback failed: {e}")
+
                 # Check presence change
                 if faces_detected != presence_state:
                     presence_state = faces_detected
@@ -805,7 +845,7 @@ class VisionProcessor:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._process: Optional[Process] = None
-        self._running_flag: Optional[Value] = None  # For multiprocessing
+        self._running_flag: Optional[Any] = None  # For multiprocessing
         self._event_queue: Optional[Queue] = None  # For multiprocessing events
         self._command_queue: Optional[Queue] = None  # For multiprocessing commands
         self._event_handler_thread: Optional[threading.Thread] = None
@@ -820,6 +860,7 @@ class VisionProcessor:
         self._mp_face_detection = None
         self._hands = None
         self._face_detection = None
+        self._face_detection_backend = "none"
         
         # Recognizers
         self.gesture_recognizer = GestureRecognizer(logger=self.logger)
@@ -1036,10 +1077,17 @@ class VisionProcessor:
             )
         
         if self.enable_faces:
-            self._face_detection = self._mp_face_detection.FaceDetection(
-                model_selection=0,  # 0 for short-range, 1 for full-range
-                min_detection_confidence=0.5,
-            )
+            try:
+                self._face_detection = self._mp_face_detection.FaceDetection(
+                    model_selection=0,  # 0 for short-range, 1 for full-range
+                    min_detection_confidence=0.5,
+                )
+                self._face_detection_backend = "mediapipe"
+            except Exception as e:
+                self._logger.warning(f"MediaPipe FaceDetection init failed, using fallback: {e}")
+                self._face_detection = None
+                if FACE_RECOGNITION_AVAILABLE:
+                    self._face_detection_backend = "face_recognition"
     
     def _cleanup(self) -> None:
         """Clean up resources."""
@@ -1094,7 +1142,7 @@ class VisionProcessor:
                     self._process_hands(rgb_frame, display_frame)
                 
                 # Process faces
-                if self.enable_faces and self._face_detection:
+                if self.enable_faces:
                     self._process_faces(rgb_frame, display_frame)
                 
                 # Draw status overlay
@@ -1240,26 +1288,50 @@ class VisionProcessor:
     
     def _process_faces(self, rgb_frame: np.ndarray, display_frame: np.ndarray) -> None:
         """Process face detection and recognition."""
-        results = self._face_detection.process(rgb_frame)
-        
         detected_faces: List[DetectedFace] = []
         h, w = rgb_frame.shape[:2]
-        
-        if results.detections:
-            for detection in results.detections:
+
+        detections: List[Tuple[int, int, int, int, float]] = []
+
+        if self._face_detection is not None:
+            try:
+                results = self._face_detection.process(rgb_frame)
+                if results.detections:
+                    for detection in results.detections:
+                        bbox = detection.location_data.relative_bounding_box
+                        x = int(bbox.xmin * w)
+                        y = int(bbox.ymin * h)
+                        width = int(bbox.width * w)
+                        height = int(bbox.height * h)
+                        confidence = detection.score[0] if detection.score else 0.0
+
+                        x = max(0, x)
+                        y = max(0, y)
+                        width = min(width, w - x)
+                        height = min(height, h - y)
+
+                        detections.append((x, y, width, height, confidence))
+            except Exception as e:
+                self._logger.warning(f"MediaPipe face detection failed, switching fallback: {e}")
+                self._face_detection = None
+                if FACE_RECOGNITION_AVAILABLE:
+                    self._face_detection_backend = "face_recognition"
+
+        # Fallback: use face_recognition for detection if MediaPipe is unavailable
+        if not detections and FACE_RECOGNITION_AVAILABLE and self._face_detection_backend == "face_recognition":
+            try:
+                face_locations = face_recognition.face_locations(rgb_frame)
+                for top, right, bottom, left in face_locations:
+                    x = max(0, left)
+                    y = max(0, top)
+                    width = max(0, right - left)
+                    height = max(0, bottom - top)
+                    detections.append((x, y, width, height, 0.8))
+            except Exception as e:
+                self._logger.debug(f"Fallback face detection failed: {e}")
+
+        for x, y, width, height, det_confidence in detections:
                 # Get bounding box
-                bbox = detection.location_data.relative_bounding_box
-                x = int(bbox.xmin * w)
-                y = int(bbox.ymin * h)
-                width = int(bbox.width * w)
-                height = int(bbox.height * h)
-                
-                # Ensure bounds are valid
-                x = max(0, x)
-                y = max(0, y)
-                width = min(width, w - x)
-                height = min(height, h - y)
-                
                 # Draw face bounding box on display frame
                 cv2.rectangle(display_frame, (x, y), (x + width, y + height), (0, 255, 0), 2)
                 
@@ -1269,7 +1341,7 @@ class VisionProcessor:
                 # Get face encoding if face_recognition is available
                 encoding = None
                 name = None
-                confidence = detection.score[0] if detection.score else 0.0
+                confidence = det_confidence
                 
                 if FACE_RECOGNITION_AVAILABLE and self._frame_count % 10 == 0:
                     # Only encode every 10th frame for performance
@@ -1528,6 +1600,43 @@ class VisionAgent(BaseAgent):
         """Handle shutdown request."""
         self._logger.info(f"Received shutdown request: {event.reason}")
         await self.stop(reason=event.reason)
+
+    def _normalize_person_name(self, value: str) -> str:
+        """Normalize a spoken/written person name for enrollment."""
+        cleaned = re.sub(r"[^a-zA-Z\s\-']", " ", value or "")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -'\"")
+        if not cleaned:
+            return ""
+        return " ".join(part.capitalize() for part in cleaned.split())
+
+    def _extract_enrollment_name(self, event: IntentRecognizedEvent) -> str:
+        """Extract enrollment name from entities first, then raw text patterns."""
+        entities = event.entities or {}
+        for key in ("name", "person", "person_name", "user", "identity"):
+            candidate = entities.get(key)
+            if isinstance(candidate, str):
+                normalized = self._normalize_person_name(candidate)
+                if normalized and normalized.lower() != "unknown":
+                    return normalized
+
+        raw_text = (event.raw_text or "").strip()
+        if not raw_text:
+            return ""
+
+        patterns = [
+            r"(?:recogni[sz]e|enrol+|enroll|save|remember|register|add)\s+(?:my\s+)?face\s+(?:as|to|for)\s+([a-zA-Z][a-zA-Z\s\-']{0,48})",
+            r"(?:my\s+name\s+is|call\s+me)\s+([a-zA-Z][a-zA-Z\s\-']{0,48})",
+            r"\bas\s+([a-zA-Z][a-zA-Z\s\-']{0,48})$",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, raw_text, flags=re.IGNORECASE)
+            if match:
+                normalized = self._normalize_person_name(match.group(1))
+                if normalized and normalized.lower() != "unknown":
+                    return normalized
+
+        return ""
     
     async def _handle_intent(self, event: IntentRecognizedEvent) -> None:
         """Handle recognized intents for vision control."""
@@ -1593,21 +1702,46 @@ class VisionAgent(BaseAgent):
                 ))
         
         elif intent == "ENROLL_FACE":
-            name = event.entities.get("name", "unknown")
-            if self.processor and FACE_RECOGNITION_AVAILABLE:
-                # Capture current face and enroll
+            name = self._extract_enrollment_name(event)
+
+            if not name:
                 await self._emit(VoiceOutputEvent(
-                    text=f"Please look at the camera. Enrolling face as {name}.",
+                    text="I couldn't catch the name. Please say: recognize my face as <your name>.",
                     source="VisionAgent",
                 ))
-                # Send enrollment command to the vision process
-                self.processor.enroll_face(name)
-                self._logger.info(f"Face enrollment requested for: {name}")
-            else:
+                return
+
+            if not FACE_RECOGNITION_AVAILABLE:
                 await self._emit(VoiceOutputEvent(
                     text="Face enrollment requires the face recognition library to be installed.",
                     source="VisionAgent",
                 ))
+                return
+
+            if not self.processor:
+                await self._emit(VoiceOutputEvent(
+                    text="Vision system is not available right now.",
+                    source="VisionAgent",
+                ))
+                return
+
+            if not self.processor._running:
+                started = self.processor.start()
+                if not started:
+                    await self._emit(VoiceOutputEvent(
+                        text="I couldn't start the camera, so I can't enroll your face yet.",
+                        source="VisionAgent",
+                    ))
+                    return
+
+            # Capture current face and enroll
+            await self._emit(VoiceOutputEvent(
+                text=f"Please look at the camera. Enrolling face as {name}.",
+                source="VisionAgent",
+            ))
+            # Send enrollment command to the vision process
+            self.processor.enroll_face(name)
+            self._logger.info(f"Face enrollment requested for: {name}")
     
     async def _handle_start(self, event: VisionStartEvent) -> None:
         """Handle vision start event."""

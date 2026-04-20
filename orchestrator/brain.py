@@ -483,6 +483,7 @@ INTENT_ROUTING: Dict[str, Dict[str, Any]] = {
 }
 
 
+
 # =============================================================================
 # Brain Configuration
 # =============================================================================
@@ -912,7 +913,7 @@ class Brain:
         # Agent lifecycle events
         self._event_bus.subscribe(AgentErrorEvent, self._handle_agent_error)
         self._event_bus.subscribe(AgentStoppedEvent, self._handle_agent_stopped)
-    
+        
     async def _handle_voice_input(self, event: VoiceInputEvent) -> None:
         """
         Handle voice input event (USER_SPOKE).
@@ -969,12 +970,12 @@ class Brain:
     ) -> None:
         """
         Route an intent to the appropriate agent.
-        
+
         The Brain is a PLANNER - it emits ActionRequestEvents
         instead of executing tasks directly.
         """
         routing = INTENT_ROUTING.get(intent)
-        
+
         if not routing:
             # Unknown intent - ask for clarification
             logger.warning(f"No routing found for intent: {intent}")
@@ -983,15 +984,15 @@ class Brain:
                 [intent],
             )
             return
-        
+
         target_agent = routing["agent"]
         action = routing["action"]
-        
+
         # Meta intents are handled by Brain (response only)
         if target_agent == "Brain":
             await self._handle_meta_intent(intent, entities, correlation_id)
             return
-        
+
         # Check if this is a multi-step command
         if self._is_multi_step_command(intent, entities):
             await self._create_and_execute_plan(intent, entities, correlation_id)

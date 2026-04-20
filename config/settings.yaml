@@ -272,7 +272,7 @@ orchestrator:
     - "system_agent"
     - "intent_agent"
     - "voice_agent"
-    - "vision_agent"  # Optional: only started if vision.enabled = true
+    - "vision_agent"      # Optional: only started if vision.enabled = true
   
   # Health check interval in seconds
   health_check_interval: 30
@@ -460,3 +460,5 @@ vision:
     
     # Only process when explicitly started (not on boot)
     require_explicit_start: true
+
+

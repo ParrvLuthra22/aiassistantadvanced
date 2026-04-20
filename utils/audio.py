@@ -1,5 +1,4 @@
-"""
-Audio utilities for the JARVIS Virtual Assistant.
+"""Audio utilities for the JARVIS Virtual Assistant.
 
 This module provides helper functions for:
 - Microphone access and audio recording
@@ -9,10 +8,23 @@ This module provides helper functions for:
 - Audio buffer management
 
 All audio operations are designed to be non-blocking where possible.
+
+Note on Python 3.13+
+====================
+The built-in :mod:`audioop` module was removed from the Python standard
+library in Python 3.13. This module previously relied on :mod:`audioop`
+for a few basic operations (RMS, volume scaling, and resampling).
+
+To keep JARVIS working on Python 3.13+, we provide small, pure-Python
+fallback implementations for the subset of functionality we use. When
+``audioop`` is available (e.g. on Python 3.12), it will be used; when it
+is not available, the fallbacks are used instead. The fallbacks are
+designed for correctness and simplicity rather than absolute speed, but
+they are perfectly adequate for the relatively small audio chunks used
+here.
 """
 
 import asyncio
-import audioop
 import io
 import logging
 import struct
@@ -27,6 +39,175 @@ from pathlib import Path
 from typing import Callable, Deque, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+try:  # Python 3.12 and earlier
+    import audioop as _audioop  # type: ignore[attr-defined]
+except ModuleNotFoundError:  # Python 3.13+ (audioop removed)
+    _audioop = None
+    logger.warning(
+        "audioop module not available (likely Python 3.13+); "
+        "falling back to pure-Python audio processing."
+    )
+
+
+# =============================================================================
+# Small pure-Python fallbacks for audioop functionality
+# =============================================================================
+
+def _unpack_samples(audio_data: bytes, sample_width: int) -> Tuple[List[int], int]:
+    """Unpack raw PCM bytes into a list of integer samples.
+
+    Supports 8-bit, 16-bit, and 32-bit signed samples (the only formats
+    we use in this project). Returns the list of samples and the maximum
+    absolute value representable for the given width (used for clipping).
+    """
+
+    if not audio_data:
+        return [], 0
+
+    if sample_width == 1:
+        fmt_char = "b"   # signed 8-bit
+        max_abs = 127
+    elif sample_width == 2:
+        fmt_char = "h"   # signed 16-bit
+        max_abs = 32767
+    elif sample_width == 4:
+        fmt_char = "i"   # signed 32-bit
+        max_abs = 2147483647
+    else:
+        raise ValueError(f"Unsupported sample width: {sample_width}")
+
+    count = len(audio_data) // sample_width
+    if count == 0:
+        return [], max_abs
+
+    fmt = f"<{count}{fmt_char}"
+    samples = list(struct.unpack(fmt, audio_data))
+    return samples, max_abs
+
+
+def _pack_samples(samples: List[int], sample_width: int, max_abs: int) -> bytes:
+    """Pack integer samples back into PCM bytes, with clipping."""
+
+    if not samples:
+        return b""
+
+    if sample_width == 1:
+        fmt_char = "b"
+    elif sample_width == 2:
+        fmt_char = "h"
+    elif sample_width == 4:
+        fmt_char = "i"
+    else:
+        raise ValueError(f"Unsupported sample width: {sample_width}")
+
+    # Clip to valid range
+    clipped = [
+        max(-max_abs - 1, min(max_abs, int(s)))
+        for s in samples
+    ]
+
+    fmt = f"<{len(clipped)}{fmt_char}"
+    return struct.pack(fmt, *clipped)
+
+
+def _rms_fallback(audio_data: bytes, sample_width: int) -> int:
+    """Pure-Python RMS calculation used when audioop is unavailable."""
+
+    samples, _ = _unpack_samples(audio_data, sample_width)
+    if not samples:
+        return 0
+    # Standard RMS: sqrt(mean(x^2))
+    acc = 0.0
+    for s in samples:
+        acc += float(s) * float(s)
+    mean_sq = acc / float(len(samples))
+    return int(mean_sq ** 0.5)
+
+
+def _mul_fallback(audio_data: bytes, sample_width: int, factor: float) -> bytes:
+    """Pure-Python volume scaling used when audioop is unavailable."""
+
+    samples, max_abs = _unpack_samples(audio_data, sample_width)
+    if not samples:
+        return audio_data
+
+    scaled = [s * factor for s in samples]
+    return _pack_samples(scaled, sample_width, max_abs)
+
+
+def _ratecv_fallback(
+    audio_data: bytes,
+    sample_width: int,
+    channels: int,
+    from_rate: int,
+    to_rate: int,
+) -> Tuple[bytes, None]:
+    """Very simple linear-resampling fallback for audioop.ratecv.
+
+    This operates per-frame, preserving the number of channels. It is
+    not as sophisticated as the C implementation but is sufficient for
+    microphone audio used by the assistant.
+    """
+
+    if from_rate == to_rate or not audio_data:
+        return audio_data, None
+
+    frame_width = sample_width * channels
+    if frame_width <= 0:
+        return audio_data, None
+
+    total_frames = len(audio_data) // frame_width
+    if total_frames == 0:
+        return b"", None
+
+    # Unpack all samples, then view them as a list of frames.
+    flat_samples, max_abs = _unpack_samples(audio_data, sample_width)
+    if not flat_samples:
+        return b"", None
+
+    frames: List[Tuple[int, ...]] = [
+        tuple(flat_samples[i * channels:(i + 1) * channels])
+        for i in range(total_frames)
+    ]
+
+    # Compute number of output frames
+    new_total_frames = int(total_frames * to_rate / from_rate)
+    if new_total_frames <= 0:
+        return b"", None
+
+    if new_total_frames == 1:
+        new_frames = [frames[0]]
+    else:
+        new_frames: List[Tuple[int, ...]] = []
+        for i in range(new_total_frames):
+            # Position in input space
+            src_pos = (i * (total_frames - 1)) / float(new_total_frames - 1)
+            left_idx = int(src_pos)
+            right_idx = min(left_idx + 1, total_frames - 1)
+            alpha = src_pos - left_idx
+
+            left = frames[left_idx]
+            right = frames[right_idx]
+
+            if left_idx == right_idx or alpha <= 0.0:
+                new_frames.append(left)
+            elif alpha >= 1.0:
+                new_frames.append(right)
+            else:
+                # Linear interpolation per channel
+                interp = tuple(
+                    int((1.0 - alpha) * float(l) + alpha * float(r))
+                    for l, r in zip(left, right)
+                )
+                new_frames.append(interp)
+
+    # Flatten frames back to a single list of samples
+    out_samples: List[int] = []
+    for frame in new_frames:
+        out_samples.extend(frame)
+
+    return _pack_samples(out_samples, sample_width, max_abs), None
 
 
 # =============================================================================
@@ -101,10 +282,16 @@ def calculate_rms(audio_data: bytes, sample_width: int = 2) -> int:
     """
     if not audio_data:
         return 0
-    try:
-        return audioop.rms(audio_data, sample_width)
-    except Exception:
-        return 0
+
+    # Prefer C implementation when available, fall back to pure Python.
+    if _audioop is not None:
+        try:
+            return _audioop.rms(audio_data, sample_width)
+        except Exception:
+            # Fall back if audioop errors for any reason
+            pass
+
+    return _rms_fallback(audio_data, sample_width)
 
 
 def is_silence(audio_data: bytes, threshold: int = SILENCE_THRESHOLD) -> bool:
@@ -140,13 +327,18 @@ def normalize_audio(audio_data: bytes, sample_width: int = 2, target_rms: int = 
     if current_rms == 0:
         return audio_data
     
-    try:
-        factor = target_rms / current_rms
-        # Clamp factor to prevent distortion
-        factor = min(factor, 4.0)
-        return audioop.mul(audio_data, sample_width, factor)
-    except Exception:
-        return audio_data
+    factor = target_rms / current_rms
+    # Clamp factor to prevent distortion
+    factor = min(factor, 4.0)
+
+    # Prefer C implementation when available, fall back otherwise.
+    if _audioop is not None:
+        try:
+            return _audioop.mul(audio_data, sample_width, factor)
+        except Exception:
+            pass
+    
+    return _mul_fallback(audio_data, sample_width, factor)
 
 
 def convert_sample_rate(
@@ -172,18 +364,33 @@ def convert_sample_rate(
     if from_rate == to_rate:
         return audio_data
     
+    # Prefer C implementation when available.
+    if _audioop is not None:
+        try:
+            converted, _ = _audioop.ratecv(
+                audio_data,
+                sample_width,
+                channels,
+                from_rate,
+                to_rate,
+                None,
+            )
+            return converted
+        except Exception as e:
+            logger.error(f"Failed to convert sample rate with audioop: {e}")
+    
+    # Fallback to pure-Python resampling
     try:
-        converted, _ = audioop.ratecv(
+        converted, _ = _ratecv_fallback(
             audio_data,
             sample_width,
             channels,
             from_rate,
             to_rate,
-            None,
         )
         return converted
     except Exception as e:
-        logger.error(f"Failed to convert sample rate: {e}")
+        logger.error(f"Failed to convert sample rate with fallback: {e}")
         return audio_data
 
 
@@ -503,17 +710,16 @@ class MicrophoneStream:
             import pyaudio
             
             self._pyaudio = pyaudio.PyAudio()
-            
-            # Check for available input devices
-            info = self._pyaudio.get_default_input_device_info()
-            logger.debug(f"Using input device: {info['name']}")
-            
+
+            # Resolve device index
+            device_index = self._resolve_input_device_index()
+
             self._stream = self._pyaudio.open(
                 format=pyaudio.paInt16,
                 channels=self._channels,
                 rate=self._sample_rate,
                 input=True,
-                input_device_index=self._device_index,
+                input_device_index=device_index,
                 frames_per_buffer=self._chunk_size,
                 stream_callback=self._audio_callback,
             )
@@ -528,13 +734,92 @@ class MicrophoneStream:
             logger.error(self._error)
             return False
         except OSError as e:
-            self._error = f"Microphone access error: {e}"
+            self._error = (
+                f"Microphone access error: {e}. "
+                "On macOS, ensure Terminal (or your IDE) has Microphone permission "
+                "in System Settings > Privacy & Security > Microphone."
+            )
             logger.error(self._error)
             return False
         except Exception as e:
             self._error = f"Failed to start microphone: {e}"
             logger.error(self._error)
             return False
+
+    def _resolve_input_device_index(self) -> Optional[int]:
+        """Resolve the input device index with fallback to first available input device."""
+        if not self._pyaudio:
+            return self._device_index
+
+        if self._device_index is not None:
+            try:
+                info = self._pyaudio.get_device_info_by_index(self._device_index)
+                if info.get("maxInputChannels", 0) > 0:
+                    logger.debug(f"Using configured input device: {info.get('name', 'unknown')}")
+                    return self._device_index
+                logger.warning(
+                    f"Configured device index {self._device_index} has no input channels; "
+                    "falling back to default input device."
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Configured device index {self._device_index} not usable: {e}. "
+                    "Falling back to default input device."
+                )
+
+        try:
+            info = self._pyaudio.get_default_input_device_info()
+            logger.debug(f"Using default input device: {info.get('name', 'unknown')}")
+            return info.get("index")
+        except Exception as e:
+            logger.warning(f"Default input device not available: {e}")
+
+        # Fallback: first available input device
+        input_devices = self.list_input_devices()
+        if input_devices:
+            first = input_devices[0]
+            logger.debug(f"Using first available input device: {first['name']}")
+            return first["index"]
+
+        raise OSError("No input devices found")
+
+    def list_input_devices(self) -> List[dict]:
+        """List available input devices for debugging."""
+        devices: List[dict] = []
+        created_local = False
+
+        if not self._pyaudio:
+            try:
+                import pyaudio
+
+                self._pyaudio = pyaudio.PyAudio()
+                created_local = True
+            except Exception as e:
+                logger.warning(f"PyAudio not available for device listing: {e}")
+                return devices
+
+        try:
+            count = self._pyaudio.get_device_count()
+            for idx in range(count):
+                info = self._pyaudio.get_device_info_by_index(idx)
+                if info.get("maxInputChannels", 0) > 0:
+                    devices.append({
+                        "index": idx,
+                        "name": info.get("name", "unknown"),
+                        "channels": info.get("maxInputChannels", 0),
+                        "defaultSampleRate": info.get("defaultSampleRate"),
+                    })
+        except Exception as e:
+            logger.warning(f"Failed to list input devices: {e}")
+        finally:
+            if created_local and self._pyaudio:
+                try:
+                    self._pyaudio.terminate()
+                except Exception:
+                    pass
+                self._pyaudio = None
+
+        return devices
     
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio callback - called from audio thread."""
