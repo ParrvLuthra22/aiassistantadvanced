@@ -401,6 +401,7 @@ class GeminiNLUProvider(NLUProvider):
         self._intents: List[IntentDefinition] = []
         self._client = None
         self._available = False
+        self._last_call_success: Optional[bool] = None
     
     async def initialize(self, intents: List[IntentDefinition]) -> None:
         """Initialize Gemini client."""
@@ -423,6 +424,11 @@ class GeminiNLUProvider(NLUProvider):
     def is_available(self) -> bool:
         """Check if provider is ready."""
         return self._available and self._client is not None
+
+    @property
+    def last_call_success(self) -> Optional[bool]:
+        """Return whether the last API call succeeded (None if never called)."""
+        return self._last_call_success
     
     async def process(
         self,
@@ -443,11 +449,13 @@ class GeminiNLUProvider(NLUProvider):
             try:
                 result = await self._call_gemini(system_prompt, user_prompt)
                 log_prompt_usage(IntentPrompts.CURRENT_VERSION, success=True)
+                self._last_call_success = True
                 return result
             except Exception as e:
                 logger.warning(f"Gemini attempt {attempt + 1} failed: {e}")
                 if attempt == self._max_retries:
                     log_prompt_usage(IntentPrompts.CURRENT_VERSION, success=False)
+                    self._last_call_success = False
                     return self._empty_result()
                 await asyncio.sleep(0.5 * (attempt + 1))  # Backoff
         
@@ -689,6 +697,7 @@ class IntentAgent(BaseAgent):
         self._confidence_threshold = self._get_config(
             "intent.confidence_threshold", 0.6
         )
+        self._last_provider_success: Optional[bool] = None
     
     @property
     def capabilities(self) -> List[AgentCapability]:
@@ -713,6 +722,24 @@ class IntentAgent(BaseAgent):
                 output_events=["MultiIntentEvent"],
             ),
         ]
+
+    def is_healthy(self) -> bool:
+        """Return True if the configured NLU provider is healthy."""
+        provider_name = self._get_config("intent.provider", "gemini")
+        if provider_name != "gemini":
+            return True
+
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return False
+
+        if isinstance(self._primary_provider, GeminiNLUProvider):
+            if not self._primary_provider.is_available:
+                return False
+            last_success = self._primary_provider.last_call_success
+            return last_success is not False
+
+        return True
     
     async def _setup(self) -> None:
         """Initialize the intent agent."""
@@ -800,12 +827,18 @@ class IntentAgent(BaseAgent):
         
         # Try primary provider
         result = await self._primary_provider.process(text, context)
+        self._last_provider_success = bool(result.get("intents")) or (
+            isinstance(self._primary_provider, GeminiNLUProvider)
+            and self._primary_provider.last_call_success is not False
+        )
         
         # Check if we got valid results
         if not result.get("intents"):
             # Fall back to pattern matching
             self._logger.debug("Primary provider failed, using fallback")
             result = await self._fallback_provider.process(text, context)
+            if isinstance(self._primary_provider, GeminiNLUProvider):
+                self._last_provider_success = self._primary_provider.last_call_success
         
         # Process results
         await self._emit_results(result, text, event.event_id)

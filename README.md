@@ -26,6 +26,7 @@ A modular, event-driven virtual assistant for macOS, inspired by JARVIS from Iro
 - **Brain (Orchestrator)**: Central coordinator managing agent lifecycle and health
 - **Event Bus**: Pub/sub system for decoupled agent communication
 - **Agents**: Specialized modules handling specific domains
+- **Health API**: FastAPI endpoint for observability (GET `/health`)
 
 ### Agents
 
@@ -35,6 +36,7 @@ A modular, event-driven virtual assistant for macOS, inspired by JARVIS from Iro
 | **IntentAgent** | Natural language understanding and intent classification |
 | **SystemAgent** | macOS system commands and integrations |
 | **MemoryAgent** | Conversation history and persistent memory |
+| **PluginAgent** | Loads Python plugins from `plugins/` and routes intents |
 
 ## Project Structure
 
@@ -94,6 +96,50 @@ export GEMINI_API_KEY="your-api-key-here"
 # Run the assistant
 python3 main.py
 ```
+
+## Observability
+
+JARVIS exposes a health endpoint for basic observability:
+
+- **Endpoint:** `GET http://localhost:8080/health`
+- **Response shape:**
+
+```json
+{
+    "status": "ok",
+    "agents": {
+        "VoiceAgent": "healthy",
+        "IntentAgent": "healthy",
+        "SystemAgent": "healthy"
+    }
+}
+```
+
+The server starts automatically when the Brain starts and shuts down during shutdown.
+
+## Plugins
+
+Place Python plugins in `plugins/` and they are auto-loaded at startup.
+
+Each plugin must define:
+
+```python
+PLUGIN_NAME = "MyPlugin"
+TRIGGERS = ["my intent", "another intent"]
+
+async def handle(event):
+        return "Response text"
+```
+
+Example plugin: `plugins/calculator_plugin.py`.
+
+## CI
+
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push and PRs to `main`:
+
+- Python 3.10
+- Installs `requirements.txt`
+- Runs `pytest tests/ --cov=. --cov-config=.coveragerc --cov-fail-under=40`
 
 ### Voice Setup (Optional but Recommended)
 
@@ -224,9 +270,64 @@ class MyNewEvent(BaseEvent):
 
 ## Future Roadmap
 
+## Phase 1 RAG Memory (Implemented)
+
+The assistant now includes a **Chroma-backed semantic memory pipeline** integrated with `MemoryAgent`.
+
+### What it does
+
+- Stores short-term and long-term semantic memory chunks in Chroma
+- Uses metadata-aware retrieval with recency + salience scoring
+- Provides diversified retrieval (MMR) and context assembly utilities
+- Keeps existing SQLite memory behavior as-is
+
+### Configuration
+
+In `config/settings.yaml`:
+
+- `memory.vector_store.enabled`
+- `memory.vector_store.provider`
+- `memory.vector_store.persist_directory`
+- `memory.vector_store.collection_name`
+- `memory.vector_store.embedding_model` (optional)
+
+### Smoke test
+
+Run the Phase 1 verification script:
+
+```bash
+python3 scripts/rag_phase1_smoke.py
+```
+
+Expected: it ingests sample memories and prints retrieved semantic matches.
+
+## HUD Overlay (Implemented)
+
+A live macOS HUD overlay is now integrated and starts automatically with the Brain.
+
+### HUD features
+
+- Borderless, always-on-top semi-transparent dark window
+- Pulsing circular waveform while `VoiceAgent` is listening
+- Last spoken command and latest assistant response
+- Live EventBus log (last 5 events: timestamp + event type + source)
+- Agent health row with status dots for:
+    - `VoiceAgent`
+    - `IntentAgent`
+    - `SystemAgent`
+    - `MemoryAgent`
+
+### HUD configuration
+
+In `config/settings.yaml` under `ui.hud`:
+
+- `enabled`
+- `width`, `height`, `x`, `y`
+- `alpha`
+- `background`
+
 - [ ] Wake word detection (Porcupine)
 - [ ] Local Whisper STT
-- [ ] HUD UI overlay
 - [ ] OpenCV integration
 - [ ] Multi-agent workflows
 - [ ] Plugin system

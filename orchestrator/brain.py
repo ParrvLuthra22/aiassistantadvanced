@@ -52,6 +52,8 @@ from agents.voice_agent import VoiceAgent
 from agents.intent_agent import IntentAgent
 from agents.system_agent import SystemAgent
 from agents.memory_agent import MemoryAgent
+from agents.plugin_agent import PluginAgent
+from api.health import HealthServer
 
 # VisionAgent is optional - only import if vision dependencies are available
 try:
@@ -79,6 +81,7 @@ from schemas.events import (
     VoiceInputEvent,
     VoiceOutputEvent,
 )
+from ui.hud_overlay import HUDOverlayController
 from utils.logger import get_logger
 
 
@@ -500,6 +503,7 @@ class BrainConfig:
         "MemoryAgent",
         "SystemAgent",
         "IntentAgent",
+        "PluginAgent",
         "VoiceAgent",
     ])
     health_check_interval: int = 30
@@ -563,6 +567,7 @@ class Brain:
             "MemoryAgent",
             "SystemAgent", 
             "IntentAgent",
+            "PluginAgent",
             "VoiceAgent",
         ]
         
@@ -581,6 +586,8 @@ class Brain:
         # Tasks
         self._health_check_task: Optional[asyncio.Task] = None
         self._main_loop_task: Optional[asyncio.Task] = None
+        self._hud_overlay: Optional[HUDOverlayController] = None
+        self._health_server: Optional[HealthServer] = None
         
         # Session info
         self._session_id = uuid4()
@@ -700,6 +707,20 @@ class Brain:
             
             # Start agents in order
             await self._start_agents()
+
+            # Start health API server
+            self._health_server = HealthServer(
+                lambda: {name: info.agent for name, info in self._agents.items()}
+            )
+            self._health_server.start()
+
+            # Start HUD overlay in dedicated thread (non-blocking).
+            try:
+                self._hud_overlay = HUDOverlayController(event_bus=self._event_bus, config=self._config)
+                await self._hud_overlay.start()
+            except Exception as exc:
+                logger.warning(f"HUD overlay could not start: {exc}")
+                self._hud_overlay = None
             
             # Start health check task
             self._health_check_task = asyncio.create_task(
@@ -756,6 +777,16 @@ class Brain:
         
         # Stop agents in reverse order
         await self._stop_agents()
+
+        # Stop HUD overlay after agent shutdown events are processed.
+        if self._hud_overlay:
+            await self._hud_overlay.stop()
+            self._hud_overlay = None
+
+        # Stop health API server
+        if self._health_server:
+            self._health_server.stop()
+            self._health_server = None
         
         # Stop event bus
         await self._event_bus.stop()
@@ -811,12 +842,14 @@ class Brain:
         system_config = self._config.get("system", {})
         memory_config = self._config.get("memory", {})
         vision_config = self._config.get("vision", {})
+        plugins_config = self._config.get("plugins", {})
         
         # Create and register agents
         agents = [
             MemoryAgent(config={"memory": memory_config}),
             SystemAgent(config={"system": system_config}),
             IntentAgent(config={"intent": intent_config}),
+            PluginAgent(config={"plugins": plugins_config}),
             VoiceAgent(config={"voice": voice_config}),
         ]
         

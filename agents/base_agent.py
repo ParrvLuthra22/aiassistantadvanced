@@ -325,6 +325,15 @@ class BaseAgent(ABC):
         if self._started_at is None:
             return 0.0
         return (datetime.utcnow() - self._started_at).total_seconds()
+
+    def is_healthy(self) -> bool:
+        """
+        Health check hook for observability.
+
+        Override in subclasses to perform more detailed checks.
+        Default implementation assumes the agent is healthy.
+        """
+        return True
     
     @property
     @abstractmethod

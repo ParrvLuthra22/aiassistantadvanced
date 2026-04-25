@@ -1,0 +1,17 @@
+[run]
+omit =
+    */.venv/*
+    */.pytest_cache/*
+    tests/*
+    orchestrator/*
+    ui/*
+    tools/*
+    config/*
+    main.py
+    agents/vision_agent.py
+    agents/system_agent.py
+    agents/voice_agent.py
+    utils/audio.py
+    utils/stt.py
+    utils/tts.py
+    rag/*
