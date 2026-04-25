@@ -189,6 +189,7 @@ class SecurityFaceAuthSettings(BaseModel):
     threshold: float = 0.82
     data_dir: str = "data/face_auth"
     owner_name: str = "parrv luthra"
+    startup_delay_seconds: float = 1.2
 
 
 class SecuritySettings(BaseModel):
@@ -270,9 +271,17 @@ class WebSearchGeminiSettings(BaseModel):
     model: str = "gemini-1.5-flash"
 
 
+class WebSearchOpenRouterSettings(BaseModel):
+    api_key: Optional[str] = None
+    model: str = "x-ai/grok-3-mini-beta"
+    endpoint: str = "https://openrouter.ai/api/v1/chat/completions"
+
+
 class WebSearchSettings(BaseModel):
     tavily_api_key: Optional[str] = None
+    llm_provider: str = "auto"
     gemini: WebSearchGeminiSettings = Field(default_factory=WebSearchGeminiSettings)
+    openrouter: WebSearchOpenRouterSettings = Field(default_factory=WebSearchOpenRouterSettings)
 
 
 class ImageSettings(BaseModel):

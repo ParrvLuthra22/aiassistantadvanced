@@ -964,7 +964,13 @@ class VoiceAgent(BaseAgent):
         if not cleaned or not self._voice_config.address_user_as_sir:
             return cleaned
         lowered = cleaned.lower()
-        if "verification successful" in lowered:
+        if (
+            "verification successful" in lowered
+            or lowered.startswith("friday starting verifying for user")
+            or lowered.startswith("hello sir")
+            or lowered.endswith(" sir")
+            or lowered.endswith(" sir.")
+        ):
             return cleaned
         if lowered.startswith(("sir,", "sir ", "good morning sir", "good evening sir")):
             return cleaned

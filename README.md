@@ -16,8 +16,10 @@ This project is designed for local-first usage on Apple Silicon with optional cl
 - Startup face verification gate before command handling
 - Local face profile enrollment and verification
 - Configurable identity threshold and camera source
-- On success FRIDAY says:
-  - `parrv luthra verification successful. Hello Sir what are we working on today`
+- Startup spoken flow:
+  - `friday starting verifying for user`
+  - `Verification Successful, Welcome Parrv Luthra`
+  - `Hello Sir what are we working on today`
 
 ### Vision / Screen Understanding (Local)
 - Full screen capture (`/tmp/friday_screen.png`)
@@ -37,7 +39,9 @@ This project is designed for local-first usage on Apple Silicon with optional cl
 - System controls (volume, brightness CLI, Wi-Fi toggle, dark mode, battery query)
 
 ### Web + Research
-- Web search agent with source summarization pipeline (provider-dependent)
+- Web search agent with Tavily + LLM summarization
+- Supports OpenRouter/Grok or Gemini for query extraction and summarization
+- If Tavily is not configured, FRIDAY can still answer in LLM-only mode (no source links)
 - HUD updates with current command/response and event transcript
 
 ### Image Generation
@@ -67,6 +71,10 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+Optional API keys:
+- `OPENROUTER_API_KEY` for Grok/OpenRouter-based extraction and summarization
+- `TAVILY_API_KEY` for source-backed live web retrieval
 
 ## 2) Install required macOS dependencies
 
@@ -115,9 +123,10 @@ Enrollment stores profile data in `data/face_auth`.
 
 ## Step C: verify startup phrase
 
-After restart, FRIDAY should speak:
-
-`parrv luthra verification successful. Hello Sir what are we working on today`
+After restart, FRIDAY should speak in order:
+1. `friday starting verifying for user`
+2. `Verification Successful, Welcome Parrv Luthra`
+3. `Hello Sir what are we working on today`
 
 If verification fails, commands remain blocked.
 
@@ -134,6 +143,8 @@ Primary file: `config/settings.yaml`
 - `security.face_auth.camera_id`: camera index
 - `vision.local_ocr_enabled`: true
 - `intent.provider`: `ollama` (recommended local) or `pattern`
+- `web_search.llm_provider`: `auto`, `openrouter`, `gemini`, or `local`
+- `web_search.openrouter.model`: set to your preferred Grok/OpenRouter model
 
 ## Manual Test Plan
 
@@ -163,6 +174,10 @@ Use these spoken commands (or keyboard input path, depending on your run mode):
 
 7. Image generation
 - “Generate image of a futuristic assistant dashboard”
+
+8. Search acknowledgement
+- “Search for best Python async tutorial”
+- FRIDAY should first say: `Thats a great idea sir`
 
 ## Troubleshooting
 

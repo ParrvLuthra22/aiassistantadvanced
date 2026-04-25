@@ -157,6 +157,52 @@ def setup_logging(config: Dict[str, Any]) -> None:
     init_from_config(general_config)
 
 
+def log_startup_preflight(config: Dict[str, Any], logger: Any) -> None:
+    """
+    Log critical startup feature switches and key availability.
+
+    This helps confirm .env keys and face-auth settings are being applied
+    when launching with `python3 main.py`.
+    """
+    from utils.api_keys import get_gemini_api_key, get_openrouter_api_key
+
+    face_auth_enabled = bool(config.get("security", {}).get("face_auth", {}).get("enabled", True))
+    owner_name = str(config.get("security", {}).get("face_auth", {}).get("owner_name", "parrv luthra"))
+    wake_word = str(config.get("voice", {}).get("wake_word", "friday"))
+    tavily_key = (
+        os.getenv("TAVILY_API_KEY")
+        or config.get("web_search", {}).get("tavily_api_key")
+        or config.get("system", {}).get("apis", {}).get("tavily", {}).get("api_key")
+    )
+    openrouter_key = get_openrouter_api_key(lambda key: _dot_get(config, key))
+    gemini_key = get_gemini_api_key(lambda key: _dot_get(config, key))
+
+    logger.info(
+        "Startup preflight | "
+        f"wake_word={wake_word} | "
+        f"face_auth_enabled={face_auth_enabled} | "
+        f"owner={owner_name}"
+    )
+    logger.info(
+        "Startup preflight keys | "
+        f"TAVILY_API_KEY={'set' if bool(tavily_key) else 'missing'} | "
+        f"OPENROUTER_API_KEY={'set' if bool(openrouter_key) else 'missing'} | "
+        f"GEMINI_API_KEY={'set' if bool(gemini_key) else 'missing'}"
+    )
+
+
+def _dot_get(config: Dict[str, Any], key: str) -> Any:
+    """Read nested dict values via dot notation."""
+    value: Any = config
+    for part in key.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+        if value is None:
+            return None
+    return value
+
+
 def print_banner() -> None:
     """Print startup banner."""
     banner = """
@@ -449,6 +495,7 @@ async def main() -> int:
     logger.info(f"Python {sys.version}")
     logger.info(f"Project root: {PROJECT_ROOT}")
     logger.info("=" * 60)
+    log_startup_preflight(config, logger)
     
     # Initialize error recovery
     error_recovery = ErrorRecovery(logger)
@@ -465,6 +512,7 @@ async def main() -> int:
     # Initialize EventBus singleton
     logger.info("Initializing EventBus...")
     event_bus = EventBus()
+    await event_bus.start()
     logger.info("EventBus initialized")
     
     # Create the Brain orchestrator
@@ -475,6 +523,7 @@ async def main() -> int:
     try:
         # Start the brain (this registers and starts all agents)
         logger.info("Starting Brain and all agents...")
+        logger.info("Boot sequence enabled: voice startup + face verification + full agent routing")
         await brain.start()
         logger.info("Brain started successfully")
         

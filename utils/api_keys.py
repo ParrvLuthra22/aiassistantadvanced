@@ -68,3 +68,37 @@ def get_gemini_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional
             return value
 
     return None
+
+
+def get_openrouter_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional[str]:
+    """
+    Resolve OpenRouter key from common env/config locations.
+
+    Priority:
+    1. Environment variables
+    2. Optional config getter (dot-path lookups)
+    """
+    env_key = get_env_value(
+        "OPENROUTER_API_KEY",
+        "openrouter_api_key",
+    )
+    if env_key:
+        return env_key
+
+    if config_getter is None:
+        return None
+
+    for key in (
+        "web_search.openrouter.api_key",
+        "intent.openrouter.api_key",
+        "openrouter_api_key",
+        "general.openrouter_api_key",
+    ):
+        try:
+            value = _clean(config_getter(key))
+        except Exception:
+            value = None
+        if value:
+            return value
+
+    return None

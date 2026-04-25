@@ -54,6 +54,8 @@ from schemas.events import IntentRecognizedEvent, VoiceInputEvent, VoiceOutputEv
 from ui.hud_overlay import HUDOverlayController
 from utils.logger import get_logger
 from utils.prompts import FallbackPatterns
+from schemas.events import EventPriority
+from utils.face_auth import FaceAuthenticator
 
 
 logger = get_logger(__name__)
@@ -166,6 +168,11 @@ class Brain:
         self._health_server: Optional[HealthServer] = None
 
         self._workflow = self._build_workflow()
+        self._face_auth_enabled = bool(
+            (self.config or {}).get("security", {}).get("face_auth", {}).get("enabled", True)
+        )
+        self._face_auth_verified = not self._face_auth_enabled
+        self._face_auth_in_progress = False
 
     @property
     def is_running(self) -> bool:
@@ -236,6 +243,11 @@ class Brain:
             self._hud_overlay = None
 
         self._state = BrainState.RUNNING
+
+        # Run startup verification once all core agents (especially VoiceAgent)
+        # are online, so boot-time speech is audible and ordered.
+        await self._run_startup_verification()
+
         logger.info(
             "[LangGraphBrain] running with nodes: IntentAgent -> (RAGAgent|ToolAgent|EventBusAgent) -> MemoryAgent"
         )
@@ -286,6 +298,19 @@ class Brain:
 
     async def _on_voice_input(self, event: VoiceInputEvent) -> None:
         """EventBus entrypoint: run graph then emit response speech event."""
+        if self._face_auth_in_progress:
+            return
+        if self._face_auth_enabled and not self._face_auth_verified:
+            await self.event_bus.emit(
+                VoiceOutputEvent(
+                    text="Access denied, Sir. Face verification failed at startup.",
+                    source="LangGraphBrain",
+                    correlation_id=event.event_id,
+                    priority=EventPriority.CRITICAL,
+                )
+            )
+            return
+
         try:
             final_state = await self.execute(text=event.text, correlation_id=event.event_id)
             response_text = (final_state.get("response_text") or "").strip()
@@ -307,6 +332,82 @@ class Brain:
                     correlation_id=event.event_id,
                 )
             )
+
+    async def _run_startup_verification(self) -> None:
+        """Speak startup sequence, verify user face, then continue normal operation."""
+        if not self._face_auth_enabled:
+            self._face_auth_verified = True
+            self._face_auth_in_progress = False
+            return
+
+        self._face_auth_in_progress = True
+        self._face_auth_verified = False
+
+        security_cfg = (self.config or {}).get("security", {}).get("face_auth", {})
+        owner_name = str(security_cfg.get("owner_name", "parrv luthra")).strip()
+        owner_display = owner_name.title()
+        camera_id = int(security_cfg.get("camera_id", 0))
+        threshold = float(security_cfg.get("threshold", 0.82))
+        data_dir = str(security_cfg.get("data_dir", "data/face_auth"))
+        delay = float(security_cfg.get("startup_delay_seconds", 1.2))
+
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            await self.event_bus.emit(
+                VoiceOutputEvent(
+                    text="friday starting verifying for user",
+                    source="LangGraphBrain",
+                    priority=EventPriority.CRITICAL,
+                )
+            )
+
+            authenticator = FaceAuthenticator(
+                data_dir=data_dir,
+                camera_id=camera_id,
+                threshold=threshold,
+            )
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, authenticator.verify_or_enroll)
+
+            if result.granted:
+                self._face_auth_verified = True
+                await self.event_bus.emit(
+                    VoiceOutputEvent(
+                        text=f"Verification Successful, Welcome {owner_display}",
+                        source="LangGraphBrain",
+                        priority=EventPriority.CRITICAL,
+                    )
+                )
+                await self.event_bus.emit(
+                    VoiceOutputEvent(
+                        text="Hello Sir what are we working on today",
+                        source="LangGraphBrain",
+                        priority=EventPriority.CRITICAL,
+                    )
+                )
+            else:
+                self._face_auth_verified = False
+                await self.event_bus.emit(
+                    VoiceOutputEvent(
+                        text=result.message,
+                        source="LangGraphBrain",
+                        priority=EventPriority.CRITICAL,
+                    )
+                )
+        except Exception as exc:
+            self._face_auth_verified = False
+            logger.error(f"[LangGraphBrain] startup verification failed: {exc}", exc_info=True)
+            await self.event_bus.emit(
+                VoiceOutputEvent(
+                    text=f"Startup verification failed: {exc}",
+                    source="LangGraphBrain",
+                    priority=EventPriority.CRITICAL,
+                )
+            )
+        finally:
+            self._face_auth_in_progress = False
 
     def _build_workflow(self):
         """Build and compile the LangGraph workflow."""

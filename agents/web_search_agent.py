@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+from urllib import request as urlrequest
 
 try:
     import google.generativeai as genai
@@ -27,7 +29,7 @@ except Exception:  # pragma: no cover - optional dependency import
 from agents.base_agent import AgentCapability, BaseAgent
 from schemas.events import HUDSearchResultsEvent, IntentRecognizedEvent, VoiceOutputEvent
 from utils.applescript import run_applescript
-from utils.api_keys import get_gemini_api_key
+from utils.api_keys import get_gemini_api_key, get_openrouter_api_key
 
 
 TRIGGER_PHRASES = [
@@ -61,6 +63,10 @@ class WebSearchAgent(BaseAgent):
         super().__init__(name=name or "WebSearchAgent", event_bus=event_bus, config=config)
         self._tavily_client: Optional[TavilyClient] = None
         self._gemini_model = None
+        self._openrouter_api_key: Optional[str] = None
+        self._openrouter_model: str = "x-ai/grok-3-mini-beta"
+        self._openrouter_endpoint: str = "https://openrouter.ai/api/v1/chat/completions"
+        self._llm_provider: str = "auto"
         self._last_tavily_call: float = 0.0
         self._cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._cache_limit = 20
@@ -86,31 +92,186 @@ class WebSearchAgent(BaseAgent):
         self._cache.clear()
 
     def _initialize_clients(self) -> None:
-        if not TAVILY_AVAILABLE:
-            self._logger.warning("tavily-python SDK unavailable; WebSearchAgent disabled")
-            return
-        if not GEMINI_AVAILABLE or genai is None:
-            self._logger.warning("google-generativeai SDK unavailable; WebSearchAgent disabled")
-            return
-
+        self._llm_provider = str(self._get_config("web_search.llm_provider", "auto")).strip().lower()
         tavily_key = (
             os.getenv("TAVILY_API_KEY")
             or self._get_config("web_search.tavily_api_key")
             or self._get_config("system.apis.tavily.api_key")
         )
+        self._openrouter_api_key = get_openrouter_api_key(self._get_config)
+        self._openrouter_model = str(
+            self._get_config("web_search.openrouter.model", "x-ai/grok-3-mini-beta")
+        ).strip()
+        self._openrouter_endpoint = str(
+            self._get_config(
+                "web_search.openrouter.endpoint",
+                "https://openrouter.ai/api/v1/chat/completions",
+            )
+        ).strip()
+
+        if tavily_key and TAVILY_AVAILABLE:
+            self._tavily_client = TavilyClient(api_key=tavily_key)
+        elif not TAVILY_AVAILABLE:
+            self._logger.warning("tavily-python SDK unavailable; web results retrieval disabled")
+        else:
+            self._logger.warning("TAVILY_API_KEY not configured; web results retrieval disabled")
 
         gemini_key = get_gemini_api_key(self._get_config)
-
-        if tavily_key:
-            self._tavily_client = TavilyClient(api_key=tavily_key)
-        else:
-            self._logger.warning("TAVILY_API_KEY not configured; WebSearchAgent disabled")
-
-        if gemini_key:
+        if gemini_key and GEMINI_AVAILABLE and genai is not None:
             genai.configure(api_key=gemini_key)
             self._gemini_model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        elif gemini_key and (not GEMINI_AVAILABLE or genai is None):
+            self._logger.warning("Gemini key found but google-generativeai SDK is unavailable")
         else:
-            self._logger.warning("Gemini API key not configured; WebSearchAgent disabled")
+            self._logger.info("Gemini not configured for web search LLM tasks")
+
+        if self._openrouter_api_key:
+            self._logger.info(f"OpenRouter enabled for web search LLM tasks: model={self._openrouter_model}")
+        else:
+            self._logger.info("OpenRouter key not configured for web search LLM tasks")
+
+        if (
+            self._llm_provider == "openrouter"
+            and not self._openrouter_api_key
+        ):
+            self._logger.warning("web_search.llm_provider=openrouter but OPENROUTER_API_KEY is missing")
+        if self._llm_provider == "gemini" and self._gemini_model is None:
+            self._logger.warning("web_search.llm_provider=gemini but Gemini is not available")
+
+        if self._llm_provider not in {"auto", "gemini", "openrouter", "local"}:
+            self._logger.warning(
+                f"Unknown web_search.llm_provider='{self._llm_provider}', falling back to auto"
+            )
+            self._llm_provider = "auto"
+
+    def _is_configured(self) -> bool:
+        return bool(self._tavily_client and (self._gemini_model is not None or self._openrouter_api_key))
+
+    def _should_prefer_openrouter(self) -> bool:
+        if self._llm_provider == "openrouter":
+            return True
+        if self._llm_provider == "gemini":
+            return False
+        if self._llm_provider == "local":
+            return False
+        # auto
+        return bool(self._openrouter_api_key)
+
+    def _has_any_llm(self) -> bool:
+        if self._llm_provider == "local":
+            return True
+        if self._should_prefer_openrouter():
+            return bool(self._openrouter_api_key)
+        return self._gemini_model is not None or bool(self._openrouter_api_key)
+
+    async def _generate_text(self, prompt: str) -> str:
+        if self._llm_provider == "local":
+            return ""
+        if self._should_prefer_openrouter() and self._openrouter_api_key:
+            text = await self._call_openrouter(prompt)
+            if text:
+                return text
+        if self._gemini_model is not None:
+            text = await self._call_gemini(prompt)
+            if text:
+                return text
+        if self._openrouter_api_key:
+            return await self._call_openrouter(prompt)
+        return ""
+
+    async def _call_gemini(self, prompt: str) -> str:
+        if self._gemini_model is None:
+            return ""
+
+        def _run() -> str:
+            response = self._gemini_model.generate_content(prompt)
+            return (getattr(response, "text", "") or "").strip()
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _run)
+        except Exception as exc:
+            self._logger.warning(f"Gemini call failed in WebSearchAgent: {exc}")
+            return ""
+
+    async def _call_openrouter(self, prompt: str) -> str:
+        if not self._openrouter_api_key:
+            return ""
+
+        payload = {
+            "model": self._openrouter_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        def _run() -> str:
+            req = urlrequest.Request(
+                self._openrouter_endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urlrequest.urlopen(req, timeout=45) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+            choices = raw.get("choices", [])
+            if not choices:
+                return ""
+            message = choices[0].get("message", {}) or {}
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, list):
+                combined: List[str] = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = str(item.get("text", "")).strip()
+                        if text:
+                            combined.append(text)
+                return "\n".join(combined).strip()
+            return ""
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _run)
+        except Exception as exc:
+            self._logger.warning(f"OpenRouter call failed in WebSearchAgent: {exc}")
+            return ""
+
+    @staticmethod
+    def _extract_query_heuristic(text: str) -> str:
+        cleaned = (text or "").strip()
+        lower = cleaned.lower()
+        for trigger in TRIGGER_PHRASES:
+            idx = lower.find(trigger)
+            if idx >= 0:
+                query = cleaned[idx + len(trigger) :].strip(" .?!,:")
+                if query:
+                    return query
+        return cleaned
+
+    @staticmethod
+    def _local_summary(query: str, results: Dict[str, Any]) -> str:
+        snippets = []
+        for item in results.get("results", [])[:3]:
+            content = str(item.get("content", "")).strip()
+            if content:
+                snippets.append(content[:220].strip())
+        if not snippets:
+            return f"I found sources for {query}, but I couldn't build a useful summary."
+        joined = " ".join(snippets)
+        return f"For {query}: {joined[:520].strip()}"
+
+    @staticmethod
+    def _clean_query(text: str) -> str:
+        value = (text or "").strip().strip("\"'`")
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        return lines[0]
 
     async def _handle_intent(self, event: IntentRecognizedEvent) -> None:
         text = self._event_text(event)
@@ -118,13 +279,29 @@ class WebSearchAgent(BaseAgent):
         if not text or self._is_vision_query(text_lower) or not self._is_search_trigger(text_lower):
             return
 
-        if self._tavily_client is None or self._gemini_model is None:
+        if not self._has_any_llm():
             await self._emit_voice("Web search is not configured yet.", event)
             return
 
         query = await self._extract_query(text)
         if not query:
             await self._emit_voice("I couldn't extract a search query.", event)
+            return
+
+        await self._emit_voice("Thats a great idea sir", event)
+
+        if self._tavily_client is None:
+            summary = await self._answer_without_tavily(query)
+            await self._emit_voice(summary, event)
+            await self._emit(
+                HUDSearchResultsEvent(
+                    query=query,
+                    summary=summary,
+                    sources=[],
+                    source=self._name,
+                    correlation_id=event.correlation_id or event.event_id,
+                )
+            )
             return
 
         results = await self._search_tavily(query)
@@ -156,16 +333,11 @@ class WebSearchAgent(BaseAgent):
 
     async def _extract_query(self, text: str) -> str:
         prompt = f"Extract the search query from: '{text}'. Return only the query string."
-
-        def _run() -> str:
-            response = self._gemini_model.generate_content(prompt)
-            return (getattr(response, "text", "") or "").strip()
-
-        loop = asyncio.get_running_loop()
-        try:
-            return await loop.run_in_executor(None, _run)
-        except Exception:
-            return ""
+        generated = await self._generate_text(prompt)
+        cleaned = self._clean_query(generated)
+        if cleaned:
+            return cleaned
+        return self._extract_query_heuristic(text)
 
     async def _search_tavily(self, query: str) -> Dict[str, Any]:
         cached = self._cache.get(query)
@@ -204,15 +376,20 @@ class WebSearchAgent(BaseAgent):
             f"{context}"
         )
 
-        def _run() -> str:
-            response = self._gemini_model.generate_content(summary_prompt)
-            return (getattr(response, "text", "") or "").strip()
+        generated = await self._generate_text(summary_prompt)
+        if generated.strip():
+            return generated.strip()
+        return self._local_summary(query, results)
 
-        loop = asyncio.get_running_loop()
-        try:
-            return await loop.run_in_executor(None, _run)
-        except Exception as exc:
-            return f"I found sources for {query}, but summarization failed: {exc}"
+    async def _answer_without_tavily(self, query: str) -> str:
+        prompt = (
+            f"Answer '{query}' in 3 clear sentences. "
+            "Be factual and direct. If uncertain, say what is uncertain."
+        )
+        generated = await self._generate_text(prompt)
+        if generated.strip():
+            return generated.strip()
+        return f"I can help with {query}, but search sources are unavailable right now."
 
     async def _open_in_safari(self, url: str, event: IntentRecognizedEvent) -> None:
         script = (

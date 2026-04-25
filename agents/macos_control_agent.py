@@ -554,7 +554,7 @@ class MacOSControlAgent(BaseAgent):
     def _extract_safari_query(self, text: str) -> str:
         patterns = [
             r"open\s+(.+?)\s+in safari",
-            r"search for\s+(.+)$",
+            r"search for\s+(.+?)\s+in safari$",
             r"go to\s+(.+?)\s+website",
             r"browse\s+(.+)$",
         ]
@@ -615,7 +615,6 @@ class MacOSControlAgent(BaseAgent):
     def _is_safari_intent(self, text_lower: str) -> bool:
         return (
             " in safari" in text_lower
-            or "search for" in text_lower
             or " website" in text_lower
             or text_lower.startswith("browse ")
         )
