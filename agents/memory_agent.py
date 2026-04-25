@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base_agent import BaseAgent, AgentCapability
 from bus.event_bus import EventBus
+from rag.rag_service import ChromaRAGMemoryService
 from schemas.events import (
     MemoryStoreEvent,
     MemoryQueryEvent,
@@ -361,10 +362,17 @@ class MemoryAgent(BaseAgent):
         
         # Get db_path from config or use default
         memory_config = (config or {}).get("memory", {})
-        db_path_str = memory_config.get("db_path", "data/memory.db")
+        db_path_str = (
+            memory_config.get("db_path")
+            or memory_config.get("sqlite", {}).get("database_path")
+            or "data/memory.db"
+        )
         self.db_path = Path(db_path_str)
         
         self.store: Optional[MemoryStore] = None
+        self._rag_service: Optional[ChromaRAGMemoryService] = None
+        self._rag_enabled = bool(memory_config.get("vector_store", {}).get("enabled", False))
+        self._vector_provider = str(memory_config.get("vector_store", {}).get("provider", "chroma")).lower()
         self._last_cleanup = 0.0
         self._conversation_turn = 0
     
@@ -389,6 +397,27 @@ class MemoryAgent(BaseAgent):
     async def _setup(self) -> None:
         """Initialize memory store and subscriptions."""
         self.store = MemoryStore(self.db_path)
+
+        # Optional semantic memory service
+        if self._rag_enabled and self._vector_provider == "chroma":
+            try:
+                memory_config = self._config.get("memory", {})
+                vs_cfg = memory_config.get("vector_store", {})
+                persist_dir = vs_cfg.get("persist_directory", "data/chroma_memory")
+                collection_name = vs_cfg.get("collection_name", "jarvis_memory")
+                embedding_model = vs_cfg.get("embedding_model")
+
+                self._rag_service = ChromaRAGMemoryService(
+                    persist_directory=persist_dir,
+                    collection_name=collection_name,
+                    embedding_model=embedding_model,
+                    chunk_size_tokens=int(vs_cfg.get("chunk_size_tokens", 400)),
+                    chunk_overlap_tokens=int(vs_cfg.get("chunk_overlap_tokens", 64)),
+                )
+                self._logger.info("Semantic vector memory enabled (Chroma)")
+            except Exception as exc:
+                self._logger.error(f"Failed to initialize semantic memory service: {exc}")
+                self._rag_service = None
         
         # Subscribe to memory events
         self._subscribe(MemoryStoreEvent, self._handle_store)
@@ -408,6 +437,10 @@ class MemoryAgent(BaseAgent):
     
     async def _teardown(self) -> None:
         """Close memory store."""
+        if self._rag_service:
+            self._rag_service.close()
+            self._rag_service = None
+
         if self.store:
             self.store.cleanup_expired()
             self.store.close()
@@ -520,6 +553,22 @@ class MemoryAgent(BaseAgent):
             value={'role': 'user', 'text': event.text, 'turn': self._conversation_turn},
             ttl_seconds=CONVERSATION_TTL
         )
+
+        if self._rag_service:
+            try:
+                await self._rag_service.ingest_text(
+                    text=event.text,
+                    memory_type=MemoryType.SHORT_TERM.value,
+                    intent="VOICE_INPUT",
+                    metadata={
+                        "role": "user",
+                        "turn": self._conversation_turn,
+                        "source": "voice",
+                    },
+                    salience=0.45,
+                )
+            except Exception as exc:
+                self._logger.warning(f"Semantic ingest failed for voice input: {exc}")
     
     async def _handle_intent(self, event: IntentRecognizedEvent) -> None:
         """Track intents and learn patterns."""
@@ -540,6 +589,48 @@ class MemoryAgent(BaseAgent):
             app_name = event.entities.get("app_name", "")
             if app_name:
                 self._track_app_opened(app_name)
+
+        if self._rag_service:
+            try:
+                # Index intent interpretation as short-term episodic memory
+                intent_text = (
+                    f"User intent={event.intent}; entities={event.entities}; "
+                    f"raw_text='{event.raw_text}'"
+                )
+                await self._rag_service.ingest_text(
+                    text=intent_text,
+                    memory_type=MemoryType.SHORT_TERM.value,
+                    intent=event.intent,
+                    metadata={
+                        "source": "intent",
+                        "confidence": event.confidence,
+                    },
+                    salience=0.60,
+                )
+
+                # Promote select intent classes to long-term semantic memory
+                promotable = {
+                    "OPEN_APP",
+                    "OPEN_APPLICATION",
+                    "SET_REMINDER",
+                    "SAVE_MEMORY",
+                    "RECALL_MEMORY",
+                    "CONTROL_VOLUME",
+                }
+                if event.intent in promotable:
+                    await self._rag_service.ingest_text(
+                        text=intent_text,
+                        memory_type=MemoryType.LONG_TERM.value,
+                        intent=event.intent,
+                        metadata={
+                            "source": "intent",
+                            "confidence": event.confidence,
+                            "promoted": True,
+                        },
+                        salience=0.72,
+                    )
+            except Exception as exc:
+                self._logger.warning(f"Semantic ingest failed for intent: {exc}")
     
     def _track_app_opened(self, app_name: str) -> None:
         """Track app usage for learning preferences."""
@@ -678,4 +769,47 @@ class MemoryAgent(BaseAgent):
         """Get memory statistics."""
         if not self.store:
             return {}
-        return self.store.get_stats()
+        stats = self.store.get_stats()
+        stats["semantic_memory_enabled"] = self._rag_service is not None
+        return stats
+
+    async def semantic_retrieve(
+        self,
+        query: str,
+        intent: str = "",
+        top_k: int = 8,
+        memory_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve semantically relevant memory chunks."""
+        if not self._rag_service:
+            return []
+
+        return await self._rag_service.retrieve(
+            query=query,
+            intent=intent,
+            top_k=top_k,
+            memory_type=memory_type,
+        )
+
+    def get_rag_service(self) -> Optional[ChromaRAGMemoryService]:
+        """Get the active RAG service instance (if enabled)."""
+        return self._rag_service
+
+    async def index_memory_text(
+        self,
+        text: str,
+        memory_type: str = MemoryType.LONG_TERM.value,
+        intent: str = "MANUAL_INDEX",
+        metadata: Optional[Dict[str, Any]] = None,
+        salience: float = 0.5,
+    ) -> int:
+        """Manually index text into semantic memory."""
+        if not self._rag_service:
+            return 0
+        return await self._rag_service.ingest_text(
+            text=text,
+            memory_type=memory_type,
+            intent=intent,
+            metadata=metadata,
+            salience=salience,
+        )

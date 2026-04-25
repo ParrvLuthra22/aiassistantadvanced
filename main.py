@@ -108,33 +108,28 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     TODO: Add environment variable overrides
     TODO: Add config schema validation
     """
-    import yaml
-    
+    from config.settings import load_config_dict
+
     # Determine config path
     if config_path is None:
         config_path = os.environ.get(
             "JARVIS_CONFIG",
             str(PROJECT_ROOT / "config" / "settings.yaml")
         )
-    
+
     config_file = Path(config_path)
-    
     if not config_file.exists():
         print(f"Warning: Config file not found: {config_path}")
         print("Using default configuration")
-        return {}
-    
+        return load_config_dict(None)
+
     try:
-        with open(config_file, "r") as f:
-            config = yaml.safe_load(f) or {}
+        config = load_config_dict(config_path)
         print(f"Loaded config from: {config_path}")
         return config
-    except yaml.YAMLError as e:
-        print(f"Error parsing config file: {e}")
-        return {}
     except Exception as e:
         print(f"Error loading config: {e}")
-        return {}
+        return load_config_dict(None)
 
 
 def setup_logging(config: Dict[str, Any]) -> None:
@@ -144,7 +139,7 @@ def setup_logging(config: Dict[str, Any]) -> None:
     Args:
         config: Configuration dictionary
     """
-    from utils.logger import configure_logging, init_from_config
+    from utils.logger import init_from_config
     
     general_config = config.get("general", {})
     
@@ -445,7 +440,7 @@ async def main() -> int:
     
     # Import after logging is configured
     from utils.logger import get_logger
-    from orchestrator.brain import Brain
+    from orchestrator import Brain
     from bus.event_bus import EventBus
     
     logger = get_logger(__name__)

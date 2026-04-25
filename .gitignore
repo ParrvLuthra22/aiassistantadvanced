@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 .venv/
+.venv*/
 venv/
 ENV/
 env/
@@ -37,6 +38,8 @@ env/
 # Models (large binary files - download separately)
 models/
 !models/.gitkeep
+kokoro-v0_19.onnx
+voices.bin
 
 # Data (runtime generated)
 data/
@@ -70,3 +73,11 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+
+# Additional Python tooling caches
+.ruff_cache/
+.hypothesis/
+.cache/
+
+# Local Python version managers
+.python-version

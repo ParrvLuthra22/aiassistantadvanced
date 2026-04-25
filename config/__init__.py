@@ -4,5 +4,10 @@ JARVIS Virtual Assistant - Config Package.
 This package handles configuration loading and validation.
 """
 
-# Config is loaded from YAML files, no Python modules needed yet
-# Future: Add config loader and validator classes
+from config.settings import AppSettings, load_config_dict, load_settings
+
+__all__ = [
+	"AppSettings",
+	"load_settings",
+	"load_config_dict",
+]

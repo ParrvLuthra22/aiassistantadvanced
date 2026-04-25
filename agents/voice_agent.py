@@ -4,7 +4,7 @@ Voice Agent Module - Speech recognition and synthesis for JARVIS.
 This agent handles all voice-related functionality:
     - Wake word detection using Vosk (FREE, offline)
     - Speech-to-text using whisper.cpp (FREE, offline, high accuracy)
-    - Text-to-speech using pyttsx3 (FREE, offline, native voices)
+    - Text-to-speech using Kokoro ONNX (offline neural voice)
     - Non-blocking audio processing in background threads
 
 Architecture:
@@ -12,7 +12,7 @@ Architecture:
     - MicrophoneStream: Captures audio from microphone
     - VoskWakeWordDetector: Listens for "Hey Jarvis" 
     - WhisperTranscriber: Converts speech to text
-    - Pyttsx3TTS: Speaks responses with native voices
+    - KokoroTTS: Speaks responses with neural voice synthesis
 
 Event Flow:
     1. Listen for wake word continuously
@@ -48,6 +48,16 @@ from schemas.events import (
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+try:
+    from kokoro_onnx import Kokoro
+    import sounddevice as sd
+
+    KOKORO_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    Kokoro = None  # type: ignore[assignment]
+    sd = None  # type: ignore[assignment]
+    KOKORO_AVAILABLE = False
 
 
 # =============================================================================
@@ -93,12 +103,79 @@ class VoiceConfig:
     buffer_seconds: float = 0.5
     
     # TTS settings
-    tts_provider: str = "pyttsx3"
-    tts_voice: str = ""
+    tts_provider: str = "kokoro"
+    tts_voice_id: str = "af_sky"
     tts_rate: int = 180
     tts_volume: float = 1.0
     tts_fallback_provider: str = "system"
     tts_fallback_voice: str = "Samantha"
+
+
+class KokoroTTS:
+    """
+    Kokoro ONNX text-to-speech implementation.
+
+    Uses local model files:
+      - kokoro-v0_19.onnx
+      - voices.bin
+    """
+
+    def __init__(self, voice_id: str = "af_sky"):
+        if not KOKORO_AVAILABLE or Kokoro is None or sd is None:
+            raise RuntimeError("kokoro-onnx/sounddevice are not available")
+        self.model = Kokoro("kokoro-v0_19.onnx", "voices.bin")
+        self.voice = voice_id or "af_sky"
+
+    def speak(self, text: str):
+        if not text.strip():
+            return
+        samples, sample_rate = self.model.create(
+            text,
+            voice=self.voice,
+            speed=1.0,
+            lang="en-us",
+        )
+        sd.play(samples, sample_rate)
+        sd.wait()
+
+
+class AsyncKokoroTTS:
+    """Async adapter so VoiceAgent can use Kokoro with the existing async API."""
+
+    def __init__(self, voice_id: str = "af_sky"):
+        self._engine = KokoroTTS(voice_id=voice_id)
+        self._is_speaking = False
+        self._lock = threading.Lock()
+
+    async def speak(self, text: str, voice: str = "", rate: float = 1.0) -> None:
+        del rate  # Kokoro speed is fixed in KokoroTTS for now.
+        if voice and voice.lower() != "default":
+            self._engine.voice = voice
+
+        with self._lock:
+            self._is_speaking = True
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._engine.speak, text)
+        finally:
+            with self._lock:
+                self._is_speaking = False
+
+    async def stop(self) -> None:
+        if KOKORO_AVAILABLE and sd is not None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, sd.stop)
+        with self._lock:
+            self._is_speaking = False
+
+    async def shutdown(self) -> None:
+        await self.stop()
+
+    @property
+    def is_speaking(self) -> bool:
+        with self._lock:
+            return self._is_speaking
 
 
 # =============================================================================
@@ -178,6 +255,14 @@ class VoiceAgent(BaseAgent):
         whisper_config = voice_config.get("whisper", {})
         recognition_config = voice_config.get("recognition", {})
         synthesis_config = voice_config.get("synthesis", {})
+        tts_config = voice_config.get("tts", {})
+
+        tts_provider = str(
+            tts_config.get("engine", synthesis_config.get("provider", "kokoro"))
+        )
+        tts_voice_id = str(
+            tts_config.get("voice_id", synthesis_config.get("voice", "af_sky"))
+        )
         
         return VoiceConfig(
             # Wake word
@@ -205,8 +290,8 @@ class VoiceAgent(BaseAgent):
             buffer_seconds=recognition_config.get("buffer_seconds", 0.5),
             
             # TTS
-            tts_provider=synthesis_config.get("provider", "pyttsx3"),
-            tts_voice=synthesis_config.get("voice", ""),
+            tts_provider=tts_provider,
+            tts_voice_id=tts_voice_id,
             tts_rate=synthesis_config.get("rate", 180),
             tts_volume=synthesis_config.get("volume", 1.0),
             tts_fallback_provider=synthesis_config.get("fallback_provider", "system"),
@@ -366,16 +451,31 @@ class VoiceAgent(BaseAgent):
     
     async def _initialize_tts(self) -> None:
         """Initialize text-to-speech."""
+        provider = (self._voice_config.tts_provider or "kokoro").lower()
+
+        if provider == "kokoro":
+            try:
+                self._tts = AsyncKokoroTTS(voice_id=self._voice_config.tts_voice_id)
+                self._logger.info(
+                    f"TTS initialized with provider: kokoro ({self._voice_config.tts_voice_id})"
+                )
+                return
+            except Exception as e:
+                self._logger.warning(
+                    f"Kokoro TTS failed to initialize ({e}); falling back to pyttsx3"
+                )
+                provider = "pyttsx3"
+
         try:
             from utils.tts import create_tts_provider
             
             self._tts = await create_tts_provider(
-                provider=self._voice_config.tts_provider,
-                voice=self._voice_config.tts_voice,
+                provider=provider,
+                voice=self._voice_config.tts_voice_id,
                 rate=self._voice_config.tts_rate,
                 fallback=True,
             )
-            self._logger.info(f"TTS initialized with provider: {self._voice_config.tts_provider}")
+            self._logger.info(f"TTS initialized with provider: {provider}")
         except Exception as e:
             self._logger.error(f"Failed to initialize TTS: {e}")
             

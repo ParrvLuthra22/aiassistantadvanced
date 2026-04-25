@@ -26,6 +26,9 @@ pyaudio>=0.2.14          # Audio capture from microphone
 
 # Text-to-Speech (pyttsx3 - FREE, offline, uses native macOS voices)
 pyttsx3>=2.90            # Offline TTS using system voices
+kokoro-onnx>=0.4.0       # Kokoro ONNX neural TTS engine
+sounddevice>=0.4.6       # Audio playback for Kokoro TTS
+soundfile>=0.12.1        # Audio file I/O helper for TTS/audio tooling
 
 # Optional: SpeechRecognition fallback (uses Google free API)
 SpeechRecognition>=3.10.0  # Fallback STT with free Google API
@@ -39,8 +42,17 @@ SpeechRecognition>=3.10.0  # Fallback STT with free Google API
 # AI / LLM (for intent recognition)
 # ------------------------------------------------------------------------------
 google-genai>=1.0.0          # Google Gemini API for intent recognition
+google-generativeai>=0.8.0   # Gemini Vision SDK (multimodal prompts)
 langgraph>=0.2.0             # Graph-based async orchestration runtime
+langchain>=0.3.0             # LangChain base package for LLM orchestration
+langchain-core>=0.3.0        # LangChain core abstractions
+langchain-google-genai>=2.0.0  # Gemini integration for LangChain/LangGraph
 chromadb>=0.5.5              # Local persistent vector DB for semantic memory
+tavily-python>=0.5.0         # Web search API client
+diffusers>=0.30.0            # Stable Diffusion pipelines
+transformers>=4.46.0         # Transformer backbones/tokenizers for diffusion
+accelerate>=0.34.0           # Device placement/runtime optimization
+torch>=2.4.0                 # PyTorch backend (Apple Silicon supports MPS)
 # Optional: Enhanced TTS
 # ------------------------------------------------------------------------------
 # elevenlabs>=0.2.0       # ElevenLabs TTS (high quality voices)
@@ -63,6 +75,8 @@ chromadb>=0.5.5              # Local persistent vector DB for semantic memory
 # ------------------------------------------------------------------------------
 # opencv-python>=4.8.0    # OpenCV for computer vision
 # mediapipe>=0.10.0       # MediaPipe for hand/face tracking
+pyautogui>=0.9.54         # Screen control and click automation
+pillow>=10.3.0            # Screenshot capture (PIL.ImageGrab)
 
 # ------------------------------------------------------------------------------
 # Future: Vector Database (for semantic memory)

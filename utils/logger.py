@@ -1195,3 +1195,26 @@ def init_from_config(config: Dict[str, Any]) -> None:
 # This ensures logging works even if configure_logging is never called
 if 'root' not in _configured_loggers:
     configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
+
+# -----------------------------------------------------------------------------
+# Requirement-driven logger override (keeps legacy module path compatible)
+# -----------------------------------------------------------------------------
+from .logger_core import (  # noqa: E402
+    AgentLogger as _CoreAgentLogger,
+    EventTracer as _CoreEventTracer,
+    clear_log_context as _core_clear_log_context,
+    configure_logging as _core_configure_logging,
+    get_agent_logger as _core_get_agent_logger,
+    get_logger as _core_get_logger,
+    init_from_config as _core_init_from_config,
+    set_log_context as _core_set_log_context,
+)
+
+configure_logging = _core_configure_logging
+get_logger = _core_get_logger
+get_agent_logger = _core_get_agent_logger
+set_log_context = _core_set_log_context
+clear_log_context = _core_clear_log_context
+EventTracer = _CoreEventTracer
+AgentLogger = _CoreAgentLogger
+init_from_config = _core_init_from_config

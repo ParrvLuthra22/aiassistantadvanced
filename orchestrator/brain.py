@@ -51,6 +51,14 @@ from agents.base_agent import AgentState, BaseAgent
 from agents.voice_agent import VoiceAgent
 from agents.intent_agent import IntentAgent
 from agents.system_agent import SystemAgent
+from agents.macos_control_agent import MacOSControlAgent
+from agents.web_search_agent import WebSearchAgent
+try:
+    from agents.image_agent import ImageAgent
+    IMAGE_AVAILABLE = True
+except ImportError:
+    ImageAgent = None  # type: ignore
+    IMAGE_AVAILABLE = False
 from agents.memory_agent import MemoryAgent
 from agents.plugin_agent import PluginAgent
 from api.health import HealthServer
@@ -842,26 +850,40 @@ class Brain:
         system_config = self._config.get("system", {})
         memory_config = self._config.get("memory", {})
         vision_config = self._config.get("vision", {})
+        image_config = self._config.get("image", {})
         plugins_config = self._config.get("plugins", {})
+        web_search_config = self._config.get("web_search", {})
         
         # Create and register agents
         agents = [
             MemoryAgent(config={"memory": memory_config}),
             SystemAgent(config={"system": system_config}),
+            MacOSControlAgent(config={"system": system_config}),
+            WebSearchAgent(config={"web_search": web_search_config, "intent": intent_config, "system": system_config}),
             IntentAgent(config={"intent": intent_config}),
             PluginAgent(config={"plugins": plugins_config}),
             VoiceAgent(config={"voice": voice_config}),
         ]
+
+        if image_config.get("enabled", True):
+            if IMAGE_AVAILABLE:
+                agents.append(ImageAgent(config={"image": image_config}))
+                logger.info("ImageAgent registered (image generation enabled)")
+            else:
+                logger.warning(
+                    "Image generation is enabled but dependencies are missing. "
+                    "Install with: pip install diffusers transformers accelerate torch"
+                )
         
         # Conditionally add VisionAgent if enabled and available
         if vision_config.get("enabled", False):
             if VISION_AVAILABLE:
-                agents.append(VisionAgent(config={"vision": vision_config}))
+                agents.append(VisionAgent(config={"vision": vision_config, "intent": intent_config}))
                 logger.info("VisionAgent registered (vision enabled)")
             else:
                 logger.warning(
                     "Vision is enabled in config but dependencies are not installed. "
-                    "Install with: pip install opencv-python mediapipe face-recognition numpy"
+                    "Install with: pip install google-generativeai pyautogui pillow"
                 )
         else:
             logger.debug("VisionAgent not registered (vision disabled in config)")

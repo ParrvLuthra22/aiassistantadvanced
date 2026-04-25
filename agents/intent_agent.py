@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base_agent import AgentCapability, BaseAgent
 from bus.event_bus import EventBus
+from orchestrator.reasoning_engine import ReasoningEngine
 from schemas.events import (
     IntentRecognizedEvent,
     IntentUnknownEvent,
@@ -698,6 +699,7 @@ class IntentAgent(BaseAgent):
             "intent.confidence_threshold", 0.6
         )
         self._last_provider_success: Optional[bool] = None
+        self._reasoning_engine: Optional[ReasoningEngine] = None
     
     @property
     def capabilities(self) -> List[AgentCapability]:
@@ -748,6 +750,7 @@ class IntentAgent(BaseAgent):
         
         # Initialize providers
         await self._initialize_providers()
+        self._reasoning_engine = ReasoningEngine(event_bus=self._event_bus, config=self._config)
         
         # Subscribe to voice input
         self._subscribe(VoiceInputEvent, self._handle_voice_input)
@@ -763,6 +766,7 @@ class IntentAgent(BaseAgent):
         if self._primary_provider:
             await self._primary_provider.shutdown()
         await self._fallback_provider.shutdown()
+        self._reasoning_engine = None
         self._logger.info("Intent agent shutdown complete")
     
     async def _initialize_providers(self) -> None:
@@ -821,6 +825,11 @@ class IntentAgent(BaseAgent):
             return
         
         self._logger.debug(f"Processing: '{text}'")
+
+        if self._reasoning_engine and await self._reasoning_engine.is_complex_request(text):
+            self._logger.info("Complex request detected, delegating to ReasoningEngine")
+            await self._reasoning_engine.run(user_input=text, correlation_id=event.event_id)
+            return
         
         # Get conversation context (TODO: integrate with memory)
         context = await self._get_context()

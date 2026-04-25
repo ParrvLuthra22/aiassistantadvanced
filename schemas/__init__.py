@@ -24,6 +24,8 @@ from schemas.events import (
     AgentErrorEvent,
     ShutdownRequestedEvent,
     ResponseGeneratedEvent,
+    HUDImageEvent,
+    HUDGraphStateEvent,
 )
 
 __all__ = [
@@ -46,4 +48,6 @@ __all__ = [
     "AgentErrorEvent",
     "ShutdownRequestedEvent",
     "ResponseGeneratedEvent",
+    "HUDImageEvent",
+    "HUDGraphStateEvent",
 ]

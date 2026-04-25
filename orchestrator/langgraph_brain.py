@@ -16,6 +16,12 @@ from langgraph.graph import END, START, StateGraph
 
 from agents.base_agent import BaseAgent
 from agents.memory_agent import MemoryAgent
+try:
+    from agents.image_agent import ImageAgent
+    IMAGE_AVAILABLE = True
+except ImportError:
+    ImageAgent = None  # type: ignore
+    IMAGE_AVAILABLE = False
 from agents.rag_agent import RAGAgent
 from agents.system_agent import SystemAgent
 from agents.tool_agent import ToolAgent
@@ -104,12 +110,18 @@ class Brain:
         memory_agent = MemoryAgent(event_bus=self.event_bus, config=self.config)
         system_agent = SystemAgent(event_bus=self.event_bus, config=self.config)
         voice_agent = VoiceAgent(event_bus=self.event_bus, config=self.config)
+        image_agent = None
+        image_cfg = (self.config or {}).get("image", {})
+        if image_cfg.get("enabled", True) and IMAGE_AVAILABLE:
+            image_agent = ImageAgent(event_bus=self.event_bus, config=self.config)
 
         self._agents = {
             "MemoryAgent": memory_agent,
             "SystemAgent": system_agent,
             "VoiceAgent": voice_agent,
         }
+        if image_agent is not None:
+            self._agents["ImageAgent"] = image_agent
 
         for agent in self._agents.values():
             await agent.start()

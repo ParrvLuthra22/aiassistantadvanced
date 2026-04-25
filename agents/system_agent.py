@@ -878,8 +878,8 @@ class SystemAgent(BaseAgent):
         "HELP": "_handle_help",
     }
     
-    def __init__(self, config: Any = None):
-        super().__init__(name="SystemAgent", config=config)
+    def __init__(self, event_bus: Optional[EventBus] = None, config: Any = None):
+        super().__init__(name="SystemAgent", event_bus=event_bus, config=config)
         self.executor: Optional[AppleScriptExecutor] = None
     
     @property

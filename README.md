@@ -41,26 +41,25 @@ A modular, event-driven virtual assistant for macOS, inspired by JARVIS from Iro
 ## Project Structure
 
 ```
-jarvis/
-├── main.py                 # Entry point
-├── orchestrator/
-│   └── brain.py           # Central coordinator
-├── agents/
-│   ├── base_agent.py      # Abstract base class
-│   ├── voice_agent.py     # Speech I/O
-│   ├── intent_agent.py    # NLU processing
-│   ├── system_agent.py    # macOS integration
-│   └── memory_agent.py    # Context management
-├── bus/
-│   └── event_bus.py       # Pub/sub event system
-├── schemas/
-│   └── events.py          # Event type definitions
-├── config/
-│   └── settings.yaml      # Configuration
-├── utils/
-│   └── logger.py          # Logging utilities
-└── requirements.txt       # Python dependencies
+aiassistanttrying/
+├── main.py                    # Application entry point
+├── agents/                    # Domain agents (voice, intent, system, memory, etc.)
+├── orchestrator/              # Brain coordinators (legacy + LangGraph paths)
+├── bus/                       # Event bus and pub/sub wiring
+├── schemas/                   # Event/data schemas
+├── config/                    # Runtime settings and typed config helpers
+├── plugins/                   # Plugin integrations
+├── rag/                       # Retrieval-augmented memory pipeline
+├── api/                       # API endpoints (health, diagnostics)
+├── ui/                        # HUD and interface modules
+├── utils/                     # Shared utilities (logging, audio, prompts, TTS/STT)
+├── tests/                     # Test suite
+├── scripts/                   # Setup and maintenance scripts
+├── docs/                      # Architecture and migration documentation
+└── requirements.txt           # Python dependencies
 ```
+
+Detailed architecture and migration docs live in [`docs/README.md`](docs/README.md).
 
 ## Quick Start
 

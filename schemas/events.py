@@ -486,6 +486,23 @@ class SystemCommandEvent(BaseEvent):
 
 
 @dataclass(frozen=True)
+class MacOSCommandEvent(BaseEvent):
+    """
+    Event to request direct macOS control commands.
+
+    Attributes:
+        command_type: High-level command category (e.g. applescript, applescript_file)
+        target: Optional command target (app/system/service)
+        payload: Arbitrary command payload
+    """
+
+    command_type: str = ""
+    target: str = ""
+    payload: Dict[str, Any] = field(default_factory=dict)
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
 class SystemCommandResultEvent(BaseEvent):
     """
     Event emitted when a system command completes.
@@ -673,6 +690,29 @@ class VisionCommandResultEvent(BaseEvent):
     success: bool = False
     result: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    source: str = field(default="VisionAgent")
+
+
+@dataclass(frozen=True)
+class ScreenshotEvent(BaseEvent):
+    """
+    Event to request a screenshot capture.
+
+    bbox uses (x, y, w, h). If omitted, full screen is captured.
+    """
+
+    bbox: Optional[tuple[int, int, int, int]] = None
+    save_path: str = "/tmp/jarvis_screen.png"
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
+class ImageGenerationEvent(BaseEvent):
+    """
+    Event to request generation of an image from a prompt.
+    """
+
+    prompt: str = ""
     source: str = field(default="VisionAgent")
 
 
@@ -879,6 +919,64 @@ class ResponseGeneratedEvent(BaseEvent):
     source: str = field(default="orchestrator")
 
 
+@dataclass(frozen=True)
+class HUDUpdateEvent(BaseEvent):
+    """
+    Event for HUD-specific updates such as screenshot thumbnails.
+    """
+
+    image_path: str = ""
+    status_text: str = ""
+    source: str = field(default="orchestrator")
+
+
+@dataclass(frozen=True)
+class HUDSearchResultsEvent(BaseEvent):
+    """
+    Event for HUD search panel updates.
+
+    Attributes:
+        query: Search query string
+        summary: Natural-language summary for the query
+        sources: Top sources as list of {"title": str, "url": str}
+    """
+
+    query: str = ""
+    summary: str = ""
+    sources: List[Dict[str, str]] = field(default_factory=list)
+    source: str = field(default="WebSearchAgent")
+
+
+@dataclass(frozen=True)
+class HUDImageEvent(BaseEvent):
+    """
+    Event for HUD image panel updates.
+
+    Attributes:
+        image_path: Filesystem path to generated image.
+    """
+
+    image_path: str = ""
+    source: str = field(default="ImageAgent")
+
+
+@dataclass(frozen=True)
+class HUDGraphStateEvent(BaseEvent):
+    """
+    Event for live reasoning graph progress in HUD.
+
+    Attributes:
+        current_node: Active node name
+        plan_steps: Planned steps with checkmark prefixes
+        tool_results: Collected tool outputs so far
+    """
+
+    current_node: str = ""
+    plan_steps: List[str] = field(default_factory=list)
+    tool_results: List[str] = field(default_factory=list)
+    source: str = field(default="ReasoningEngine")
+
+
 # =============================================================================
 # Event Registry - For dynamic event handling
 # =============================================================================
@@ -893,6 +991,7 @@ EVENT_REGISTRY: Dict[str, type] = {
     "MultiIntentEvent": MultiIntentEvent,
     "ParsedIntent": ParsedIntent,
     "SystemCommandEvent": SystemCommandEvent,
+    "MacOSCommandEvent": MacOSCommandEvent,
     "SystemCommandResultEvent": SystemCommandResultEvent,
     "ApplicationLaunchedEvent": ApplicationLaunchedEvent,
     "SystemNotificationEvent": SystemNotificationEvent,
@@ -904,6 +1003,8 @@ EVENT_REGISTRY: Dict[str, type] = {
     "FaceLostEvent": FaceLostEvent,
     "VisionCommandEvent": VisionCommandEvent,
     "VisionCommandResultEvent": VisionCommandResultEvent,
+    "ScreenshotEvent": ScreenshotEvent,
+    "ImageGenerationEvent": ImageGenerationEvent,
     "PresenceChangedEvent": PresenceChangedEvent,
     # Memory events
     "MemoryStoreEvent": MemoryStoreEvent,
@@ -918,6 +1019,10 @@ EVENT_REGISTRY: Dict[str, type] = {
     "TaskCompletedEvent": TaskCompletedEvent,
     "ShutdownRequestedEvent": ShutdownRequestedEvent,
     "ResponseGeneratedEvent": ResponseGeneratedEvent,
+    "HUDUpdateEvent": HUDUpdateEvent,
+    "HUDSearchResultsEvent": HUDSearchResultsEvent,
+    "HUDImageEvent": HUDImageEvent,
+    "HUDGraphStateEvent": HUDGraphStateEvent,
     # Orchestrator events
     "ActionRequestEvent": ActionRequestEvent,
     "ActionResultEvent": ActionResultEvent,

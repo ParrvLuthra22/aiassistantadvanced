@@ -129,11 +129,16 @@ voice:
     vad_aggressiveness: 2  # 0-3, higher = more aggressive filtering
   
   # Text-to-speech settings
+  tts:
+    # Preferred engine: kokoro (neural) with pyttsx3 fallback.
+    engine: "kokoro"
+    voice_id: "af_sky"
+
+  # Legacy synthesis block kept for backward compatibility.
   synthesis:
-    # Provider: 'pyttsx3' (offline, cross-platform), 'system' (macOS say)
-    # Using 'system' for more reliable macOS speech
-    provider: "system"
-    voice: "Samantha"  # macOS voice name
+    # Provider fallback chain after Kokoro load failures.
+    provider: "pyttsx3"
+    voice: "Samantha"  # pyttsx3/macOS fallback voice
     rate: 180  # Words per minute
     volume: 1.0  # 0.0 to 1.0
     
@@ -153,6 +158,7 @@ intent:
     model: "gemini-2.0-flash"
     temperature: 0.3
     max_tokens: 500
+    api_key: null
     # API key should be in environment: GEMINI_API_KEY
   
   # OpenAI settings (if using OpenAI provider)
@@ -160,6 +166,7 @@ intent:
     model: "gpt-4"
     temperature: 0.3
     max_tokens: 500
+    api_key: null
     # API key should be in environment: OPENAI_API_KEY
   
   # Confidence thresholds
@@ -259,8 +266,13 @@ memory:
   # Vector store for semantic search (future)
   # TODO: Add vector database configuration
   vector_store:
-    enabled: false
+    enabled: true
     provider: "chroma"  # 'chroma', 'pinecone', 'weaviate'
+    persist_directory: "data/chroma_memory"
+    collection_name: "jarvis_memory"
+    embedding_model: null  # Optional: e.g. sentence-transformers/all-MiniLM-L6-v2
+    chunk_size_tokens: 400
+    chunk_overlap_tokens: 64
 
 # -----------------------------------------------------------------------------
 # Orchestrator Configuration
@@ -318,15 +330,20 @@ security:
     max_requests_per_minute: 60
 
 # -----------------------------------------------------------------------------
-# Future: UI Configuration (placeholder)
+# UI / HUD Configuration
 # -----------------------------------------------------------------------------
-# TODO: Add HUD UI settings when UI agent is implemented
 ui:
-  enabled: false
+  enabled: true
   hud:
-    position: "top-right"
-    opacity: 0.9
-    theme: "dark"
+    enabled: true
+    # Geometry (pixels)
+    width: 620
+    height: 320
+    x: 24
+    y: 24
+    # Visual style
+    alpha: 0.88
+    background: "#0a0e1a"
 
 # -----------------------------------------------------------------------------
 # Vision Agent Configuration
@@ -462,3 +479,20 @@ vision:
     require_explicit_start: true
 
 
+# -----------------------------------------------------------------------------
+# Web Search Agent Configuration
+# -----------------------------------------------------------------------------
+web_search:
+  # API key for Tavily Search
+  tavily_api_key: null
+  # You can also use env: TAVILY_API_KEY
+  gemini:
+    api_key: null
+    model: "gemini-1.5-flash"
+
+
+# -----------------------------------------------------------------------------
+# Image Generation Configuration
+# -----------------------------------------------------------------------------
+image:
+  enabled: true
