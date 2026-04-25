@@ -209,6 +209,13 @@ intent:
 # -----------------------------------------------------------------------------
 # System Agent Configuration
 # -----------------------------------------------------------------------------
+vision:
+  gemini:
+    model: "gemini-2.0-flash"
+    # Last-resort troubleshooting flag for SSL interception environments.
+    # Keep false unless TLS trust chain cannot be repaired.
+    allow_insecure_ssl: false
+
 system:
   # macOS integration settings
   macos:
@@ -337,8 +344,9 @@ ui:
   hud:
     enabled: true
     # Geometry (pixels)
-    width: 620
-    height: 320
+    width: 680
+    height: 380
+    collapsed_size: 112
     x: 24
     y: 24
     # Visual style

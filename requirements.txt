@@ -19,7 +19,7 @@ uvicorn>=0.27.0          # ASGI server for health API
 # Voice & Speech - FREE, LOCAL options
 # ------------------------------------------------------------------------------
 # Wake word detection (Vosk - FREE, offline)
-vosk>=0.3.45             # Vosk speech recognition for wake word detection
+vosk>=0.3.44             # Vosk speech recognition for wake word detection
 
 # Microphone capture
 pyaudio>=0.2.14          # Audio capture from microphone
@@ -77,6 +77,7 @@ torch>=2.4.0                 # PyTorch backend (Apple Silicon supports MPS)
 # mediapipe>=0.10.0       # MediaPipe for hand/face tracking
 pyautogui>=0.9.54         # Screen control and click automation
 pillow>=10.3.0            # Screenshot capture (PIL.ImageGrab)
+pytesseract>=0.3.10       # Local OCR fallback when cloud vision is unavailable
 
 # ------------------------------------------------------------------------------
 # Future: Vector Database (for semantic memory)
@@ -100,3 +101,4 @@ pytest-cov>=4.1.0
 # Optional: Better Console Output
 # ------------------------------------------------------------------------------
 colorama>=0.4.6          # Cross-platform colored terminal output
+certifi>=2024.8.30       # Reliable CA bundle for TLS API calls (Gemini REST fallback)

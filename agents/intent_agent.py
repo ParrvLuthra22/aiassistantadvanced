@@ -52,6 +52,7 @@ from schemas.events import (
 )
 from utils.logger import get_logger
 from utils.prompts import IntentPrompts, FallbackPatterns, log_prompt_usage
+from utils.api_keys import get_gemini_api_key
 
 
 logger = get_logger(__name__)
@@ -408,9 +409,9 @@ class GeminiNLUProvider(NLUProvider):
         """Initialize Gemini client."""
         self._intents = intents
         
-        api_key = os.environ.get("GEMINI_API_KEY")
+        api_key = get_gemini_api_key()
         if not api_key:
-            logger.warning("GEMINI_API_KEY not set - Gemini NLU unavailable")
+            logger.warning("Gemini API key not set - Gemini NLU unavailable")
             return
         
         try:
@@ -731,7 +732,7 @@ class IntentAgent(BaseAgent):
         if provider_name != "gemini":
             return True
 
-        api_key = os.environ.get("GEMINI_API_KEY")
+        api_key = get_gemini_api_key(self._get_config)
         if not api_key:
             return False
 

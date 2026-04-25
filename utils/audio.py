@@ -696,6 +696,9 @@ class MicrophoneStream:
         
         self._pyaudio = None
         self._stream = None
+        self._sd = None
+        self._sd_stream = None
+        self._backend = "none"
         self._running = False
         self._error: Optional[str] = None
     
@@ -725,15 +728,44 @@ class MicrophoneStream:
             )
             
             self._running = True
+            self._backend = "pyaudio"
             self._stream.start_stream()
-            logger.info("Microphone stream started")
+            logger.info("Microphone stream started (backend=pyaudio)")
             return True
             
         except ImportError:
-            self._error = "PyAudio not installed. Run: pip install pyaudio"
-            logger.error(self._error)
-            return False
+            logger.warning("PyAudio not installed; attempting sounddevice input backend")
+            return self._start_with_sounddevice()
         except OSError as e:
+            logger.warning(f"PyAudio microphone open failed ({e}); attempting sounddevice backend")
+            return self._start_with_sounddevice()
+        except Exception as e:
+            logger.warning(f"PyAudio backend failed ({e}); attempting sounddevice backend")
+            return self._start_with_sounddevice()
+
+    def _start_with_sounddevice(self) -> bool:
+        """Fallback microphone backend using sounddevice when PyAudio is unavailable."""
+        try:
+            import sounddevice as sd
+            import numpy as np
+
+            del np  # imported to ensure ndarray support is available at runtime
+            self._sd = sd
+            device_index = self._resolve_sounddevice_input_device(sd)
+            self._sd_stream = sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=self._channels,
+                blocksize=self._chunk_size,
+                dtype="int16",
+                device=device_index,
+                callback=self._sounddevice_callback,
+            )
+            self._sd_stream.start()
+            self._running = True
+            self._backend = "sounddevice"
+            logger.info("Microphone stream started (backend=sounddevice)")
+            return True
+        except Exception as e:
             self._error = (
                 f"Microphone access error: {e}. "
                 "On macOS, ensure Terminal (or your IDE) has Microphone permission "
@@ -741,10 +773,37 @@ class MicrophoneStream:
             )
             logger.error(self._error)
             return False
+
+    def _resolve_sounddevice_input_device(self, sd) -> Optional[int]:
+        """Resolve sounddevice input device with safe fallback ordering."""
+        if self._device_index is not None:
+            try:
+                info = sd.query_devices(self._device_index)
+                if int(info.get("max_input_channels", 0)) > 0:
+                    logger.debug(
+                        f"Using configured sounddevice input device: {info.get('name', 'unknown')}"
+                    )
+                    return int(self._device_index)
+            except Exception as e:
+                logger.warning(f"Configured sounddevice index {self._device_index} unavailable: {e}")
+
+        try:
+            default_input, _ = sd.default.device
+            if default_input is not None and int(default_input) >= 0:
+                info = sd.query_devices(int(default_input))
+                if int(info.get("max_input_channels", 0)) > 0:
+                    logger.debug(f"Using default sounddevice input: {info.get('name', 'unknown')}")
+                    return int(default_input)
         except Exception as e:
-            self._error = f"Failed to start microphone: {e}"
-            logger.error(self._error)
-            return False
+            logger.warning(f"Default sounddevice input unavailable: {e}")
+
+        devices = self.list_input_devices()
+        if devices:
+            first = devices[0]
+            logger.debug(f"Using first available sounddevice input: {first['name']}")
+            return int(first["index"])
+
+        raise OSError("No input devices found")
 
     def _resolve_input_device_index(self) -> Optional[int]:
         """Resolve the input device index with fallback to first available input device."""
@@ -796,7 +855,8 @@ class MicrophoneStream:
                 created_local = True
             except Exception as e:
                 logger.warning(f"PyAudio not available for device listing: {e}")
-                return devices
+                self._pyaudio = None
+                return self._list_input_devices_sounddevice()
 
         try:
             count = self._pyaudio.get_device_count()
@@ -820,6 +880,28 @@ class MicrophoneStream:
                 self._pyaudio = None
 
         return devices
+
+    def _list_input_devices_sounddevice(self) -> List[dict]:
+        """List input devices through sounddevice when PyAudio is unavailable."""
+        devices: List[dict] = []
+        try:
+            import sounddevice as sd
+
+            queried = sd.query_devices()
+            for idx, info in enumerate(queried):
+                max_input = int(info.get("max_input_channels", 0))
+                if max_input > 0:
+                    devices.append(
+                        {
+                            "index": idx,
+                            "name": info.get("name", "unknown"),
+                            "channels": max_input,
+                            "defaultSampleRate": info.get("default_samplerate"),
+                        }
+                    )
+        except Exception as e:
+            logger.warning(f"sounddevice not available for device listing: {e}")
+        return devices
     
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio callback - called from audio thread."""
@@ -832,6 +914,17 @@ class MicrophoneStream:
                 logger.error(f"Audio callback error: {e}")
         
         return (None, pyaudio.paContinue if self._running else pyaudio.paComplete)
+
+    def _sounddevice_callback(self, indata, frames, time_info, status) -> None:
+        """sounddevice callback - convert frames to raw bytes for pipeline compatibility."""
+        del frames, time_info
+        if status:
+            logger.debug(f"sounddevice status: {status}")
+        if self._running and indata is not None:
+            try:
+                self._callback(indata.tobytes())
+            except Exception as e:
+                logger.error(f"Audio callback error (sounddevice): {e}")
     
     def stop(self) -> None:
         """Stop capturing audio."""
@@ -851,7 +944,17 @@ class MicrophoneStream:
             except Exception as e:
                 logger.debug(f"Error terminating PyAudio: {e}")
             self._pyaudio = None
-        
+
+        if self._sd_stream:
+            try:
+                self._sd_stream.stop()
+                self._sd_stream.close()
+            except Exception as e:
+                logger.debug(f"Error closing sounddevice stream: {e}")
+            self._sd_stream = None
+
+        self._sd = None
+        self._backend = "none"
         logger.info("Microphone stream stopped")
     
     @property

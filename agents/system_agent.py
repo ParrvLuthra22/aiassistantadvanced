@@ -935,10 +935,10 @@ class SystemAgent(BaseAgent):
         # Initialize AppleScript executor
         self.executor = AppleScriptExecutor(logger=self._logger)
         
-        # Subscribe to events
-        self.event_bus.subscribe(ShutdownRequestedEvent, self._handle_shutdown)
-        self.event_bus.subscribe(IntentRecognizedEvent, self._handle_intent)
-        self.event_bus.subscribe(SystemCommandEvent, self._handle_command)
+        # In LangGraph mode, ToolAgent calls handlers directly to avoid duplicate responses.
+        if bool(self._get_config("system.listen_intent_events", False)):
+            self._subscribe(IntentRecognizedEvent, self._handle_intent)
+        self._subscribe(SystemCommandEvent, self._handle_command)
         
         self._logger.info("System agent initialized")
     

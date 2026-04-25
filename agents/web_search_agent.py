@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover - optional dependency import
 from agents.base_agent import AgentCapability, BaseAgent
 from schemas.events import HUDSearchResultsEvent, IntentRecognizedEvent, VoiceOutputEvent
 from utils.applescript import run_applescript
+from utils.api_keys import get_gemini_api_key
 
 
 TRIGGER_PHRASES = [
@@ -37,6 +38,14 @@ TRIGGER_PHRASES = [
     "latest news on",
     "who is",
     "how does",
+]
+VISION_EXCLUSION_PHRASES = [
+    "on my screen",
+    "read my screen",
+    "describe my screen",
+    "describe screen",
+    "read that",
+    "what does it say",
 ]
 
 
@@ -90,11 +99,7 @@ class WebSearchAgent(BaseAgent):
             or self._get_config("system.apis.tavily.api_key")
         )
 
-        gemini_key = (
-            os.getenv("GEMINI_API_KEY")
-            or self._get_config("intent.gemini.api_key")
-            or self._get_config("web_search.gemini.api_key")
-        )
+        gemini_key = get_gemini_api_key(self._get_config)
 
         if tavily_key:
             self._tavily_client = TavilyClient(api_key=tavily_key)
@@ -109,7 +114,8 @@ class WebSearchAgent(BaseAgent):
 
     async def _handle_intent(self, event: IntentRecognizedEvent) -> None:
         text = self._event_text(event)
-        if not text or not self._is_search_trigger(text.lower()):
+        text_lower = text.lower() if text else ""
+        if not text or self._is_vision_query(text_lower) or not self._is_search_trigger(text_lower):
             return
 
         if self._tavily_client is None or self._gemini_model is None:
@@ -245,6 +251,10 @@ class WebSearchAgent(BaseAgent):
     @staticmethod
     def _is_search_trigger(text_lower: str) -> bool:
         return any(phrase in text_lower for phrase in TRIGGER_PHRASES)
+
+    @staticmethod
+    def _is_vision_query(text_lower: str) -> bool:
+        return any(phrase in text_lower for phrase in VISION_EXCLUSION_PHRASES)
 
     @staticmethod
     def _escape_applescript(value: str) -> str:

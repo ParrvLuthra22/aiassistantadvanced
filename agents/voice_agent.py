@@ -146,6 +146,17 @@ class AsyncKokoroTTS:
         self._engine = KokoroTTS(voice_id=voice_id)
         self._is_speaking = False
         self._lock = threading.Lock()
+        self._validate_output_device()
+
+    @staticmethod
+    def _validate_output_device() -> None:
+        """Fail fast if there is no usable output device for sounddevice."""
+        if not KOKORO_AVAILABLE or sd is None:
+            raise RuntimeError("sounddevice is unavailable")
+        try:
+            sd.query_devices(kind="output")
+        except Exception as exc:
+            raise RuntimeError(f"No output audio device available: {exc}") from exc
 
     async def speak(self, text: str, voice: str = "", rate: float = 1.0) -> None:
         del rate  # Kokoro speed is fixed in KokoroTTS for now.
@@ -244,6 +255,8 @@ class VoiceAgent(BaseAgent):
         self._wake_word_detected = asyncio.Event()
         self._recording_complete = asyncio.Event()
         self._shutdown_event = threading.Event()
+        self._keyboard_fallback_logged = False
+        self._last_mic_retry = 0.0
     
     def _load_config(self, config: Optional[Dict[str, Any]]) -> VoiceConfig:
         """Load configuration from dict (from settings.yaml)."""
@@ -328,9 +341,8 @@ class VoiceAgent(BaseAgent):
         """Initialize voice components and start listening."""
         self._logger.info(f"Voice agent initializing with wake word: '{self._voice_config.wake_word}'")
         
-        # Subscribe to events
-        self._event_bus.subscribe(VoiceOutputEvent, self._handle_voice_output)
-        self._event_bus.subscribe(ShutdownRequestedEvent, self._handle_shutdown)
+        # Subscribe via BaseAgent bookkeeping to avoid duplicate handlers on restart.
+        self._subscribe(VoiceOutputEvent, self._handle_voice_output)
         
         # Initialize components
         await self._initialize_components()
@@ -357,10 +369,6 @@ class VoiceAgent(BaseAgent):
         
         # Stop components
         await self._shutdown_components()
-        
-        # Unsubscribe from events
-        self._event_bus.unsubscribe(VoiceOutputEvent, self._handle_voice_output)
-        self._event_bus.unsubscribe(ShutdownRequestedEvent, self._handle_shutdown)
         
         self._logger.info("Voice agent shutdown complete")
     
@@ -491,6 +499,36 @@ class VoiceAgent(BaseAgent):
             except Exception as e2:
                 self._logger.error(f"TTS completely unavailable: {e2}")
                 self._tts = None
+
+    async def _switch_to_fallback_tts(self, reason: str) -> bool:
+        """
+        Switch to fallback TTS provider and keep assistant responsive.
+
+        Returns True when fallback provider is ready.
+        """
+        self._logger.warning(f"Switching TTS to fallback provider: {reason}")
+        try:
+            from utils.tts import create_tts_provider
+
+            if self._tts:
+                try:
+                    await self._tts.shutdown()
+                except Exception:
+                    pass
+
+            # Prefer pyttsx3 for compatibility with user-requested fallback.
+            self._tts = await create_tts_provider(
+                provider="pyttsx3",
+                voice=self._voice_config.tts_fallback_voice,
+                rate=self._voice_config.tts_rate,
+                fallback=True,
+            )
+            self._logger.info("Fallback TTS initialized (pyttsx3/system chain)")
+            return True
+        except Exception as exc:
+            self._logger.error(f"Fallback TTS initialization failed: {exc}")
+            self._tts = None
+            return False
     
     async def _initialize_microphone(self) -> None:
         """Initialize microphone capture."""
@@ -611,7 +649,7 @@ class VoiceAgent(BaseAgent):
             try:
                 # If microphone unavailable, use keyboard fallback
                 if not self._mic_stream:
-                    await self._keyboard_input_fallback()
+                    await self._recover_microphone()
                     continue
 
                 # If no wake word detector, use speech-activated mode
@@ -652,6 +690,23 @@ class VoiceAgent(BaseAgent):
             except Exception as e:
                 self._logger.error(f"Error in listen loop: {e}", exc_info=True)
                 await asyncio.sleep(1)  # Back off on error
+
+    async def _recover_microphone(self) -> None:
+        """
+        Keep trying microphone recovery so voice capture survives tab/app switches.
+
+        Falls back to keyboard input only when stdin is interactive.
+        """
+        now = time.monotonic()
+        if now - self._last_mic_retry >= 3.0:
+            self._last_mic_retry = now
+            self._logger.warning("Microphone unavailable, retrying audio input backend")
+            await self._initialize_microphone()
+            if self._mic_stream:
+                self._logger.info("Microphone recovered")
+                self._keyboard_fallback_logged = False
+                return
+        await self._keyboard_input_fallback()
 
     async def _listen_without_wake_word(self) -> None:
         """Listen continuously using VAD when wake word detector is unavailable."""
@@ -823,10 +878,16 @@ class VoiceAgent(BaseAgent):
         
         Allows testing via stdin keyboard input.
         """
-        self._logger.info("Running in keyboard input mode (no microphone)")
+        if not self._keyboard_fallback_logged:
+            self._logger.warning("Running in keyboard input mode (no microphone)")
+            self._keyboard_fallback_logged = True
         
         import sys
         import select
+
+        if not sys.stdin or not sys.stdin.isatty():
+            await asyncio.sleep(0.5)
+            return
         
         # Check if stdin has input (non-blocking)
         if sys.stdin in select.select([sys.stdin], [], [], 0.5)[0]:
@@ -866,11 +927,25 @@ class VoiceAgent(BaseAgent):
         
         try:
             if self._tts:
-                await self._tts.speak(
-                    text=event.text,
-                    voice=event.voice_id if event.voice_id != "default" else "",
-                    rate=event.speed,
-                )
+                try:
+                    await self._tts.speak(
+                        text=event.text,
+                        voice=event.voice_id if event.voice_id != "default" else "",
+                        rate=event.speed,
+                    )
+                except Exception as exc:
+                    self._logger.warning(f"Primary TTS playback failed: {exc}")
+                    # Runtime fallback for output-device errors and other playback faults.
+                    switched = await self._switch_to_fallback_tts(str(exc))
+                    if switched and self._tts:
+                        try:
+                            await self._tts.speak(
+                                text=event.text,
+                                voice=event.voice_id if event.voice_id != "default" else "",
+                                rate=event.speed,
+                            )
+                        except Exception as retry_exc:
+                            self._logger.error(f"Fallback TTS playback failed: {retry_exc}")
             else:
                 self._logger.warning("TTS not available")
         finally:

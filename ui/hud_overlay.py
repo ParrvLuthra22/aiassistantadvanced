@@ -42,7 +42,16 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-TARGET_AGENTS = ["VoiceAgent", "IntentAgent", "SystemAgent", "MemoryAgent", "ImageAgent"]
+TARGET_AGENTS = [
+    "VoiceAgent",
+    "IntentAgent",
+    "SystemAgent",
+    "MemoryAgent",
+    "VisionAgent",
+    "WebSearchAgent",
+    "MacOSControlAgent",
+    "ImageAgent",
+]
 
 
 def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
@@ -56,8 +65,9 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
     model = HUDModel()
     phase = 0.0
 
-    width = int(config.get("width", 620))
-    height = int(config.get("height", 320))
+    width = int(config.get("width", 680))
+    height = int(config.get("height", 380))
+    collapsed_size = int(config.get("collapsed_size", 112))
     x = int(config.get("x", 24))
     y = int(config.get("y", 24))
     alpha = float(config.get("alpha", 0.88))
@@ -65,7 +75,7 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
 
     root = tk.Tk()
     root.title("JARVIS HUD")
-    root.geometry(f"{width}x{height}+{x}+{y}")
+    root.geometry(f"{collapsed_size}x{collapsed_size}+{x}+{y}")
     root.configure(bg=background)
     root.overrideredirect(True)
     root.attributes("-topmost", True)
@@ -83,8 +93,11 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
     except Exception:
         pass
 
-    wave_canvas = tk.Canvas(root, width=88, height=88, bg=background, highlightthickness=0, bd=0)
-    wave_canvas.place(x=18, y=18)
+    wave_canvas = tk.Canvas(root, width=88, height=88, bg=background, highlightthickness=0, bd=0, cursor="hand2")
+    wave_canvas.place(x=(collapsed_size - 88) // 2, y=(collapsed_size - 88) // 2)
+
+    text_left_x = 120
+    text_width = max(260, width - text_left_x - 150)
 
     command_label = tk.Label(
         root,
@@ -94,9 +107,8 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
         fg="#ffffff",
         bg=background,
         font=("Menlo", 13),
-        wraplength=width - 130,
+        wraplength=text_width,
     )
-    command_label.place(x=120, y=18)
 
     response_label = tk.Label(
         root,
@@ -106,9 +118,8 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
         fg="#00e5ff",
         bg=background,
         font=("Menlo", 13),
-        wraplength=width - 130,
+        wraplength=text_width,
     )
-    response_label.place(x=120, y=60)
 
     screenshot_label = tk.Label(
         root,
@@ -117,96 +128,39 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
         bd=1,
         relief="solid",
     )
-    screenshot_label.place(x=width - 130, y=18, width=110, height=76)
 
-    screenshot_photo = None
-
-    search_header = tk.Label(
+    transcript_label = tk.Label(
         root,
-        text="Search Sources",
+        text="Transcript",
         anchor="w",
         justify="left",
         fg="#9eb2d0",
         bg=background,
         font=("Menlo", 11),
     )
-    search_header.place(x=width - 280, y=104)
 
-    search_listbox = tk.Listbox(
+    transcript_text = tk.Text(
         root,
         fg="#d7dff0",
         bg="#111827",
-        selectbackground="#1f2937",
+        insertbackground="#d7dff0",
         highlightthickness=0,
         borderwidth=1,
         relief="solid",
-        font=("Menlo", 9),
+        font=("Menlo", 10),
+        wrap="word",
+        state="disabled",
     )
-    search_listbox.place(x=width - 280, y=124, width=250, height=120)
-
-    search_scrollbar = tk.Scrollbar(root, orient="vertical", command=search_listbox.yview)
-    search_scrollbar.place(x=width - 30, y=124, width=10, height=120)
-    search_listbox.config(yscrollcommand=search_scrollbar.set)
-
-    search_summary_label = tk.Label(
-        root,
-        text="",
-        anchor="w",
-        justify="left",
-        fg="#bfe3ff",
-        bg=background,
-        font=("Menlo", 9),
-        wraplength=250,
-    )
-    search_summary_label.place(x=width - 280, y=248, width=250, height=42)
-
-    generated_image_label = tk.Label(
-        root,
-        text="",
-        bg=background,
-        bd=1,
-        relief="solid",
-    )
-    generated_image_label.place(x=width - 286, y=height - 286, width=256, height=256)
-
-    generated_caption_label = tk.Label(
-        root,
-        text="",
-        anchor="w",
-        justify="left",
-        fg="#d6ecff",
-        bg=background,
-        font=("Menlo", 9),
-        wraplength=256,
-    )
-    generated_caption_label.place(x=width - 286, y=height - 28, width=256, height=22)
-
-    tk.Label(
-        root,
-        text="Event Log",
-        anchor="w",
-        justify="left",
-        fg="#9eb2d0",
-        bg=background,
-        font=("Menlo", 11),
-    ).place(x=18, y=128)
-
-    event_labels: List[Any] = []
-    for idx in range(5):
-        line = tk.Label(
-            root,
-            text="",
-            anchor="w",
-            justify="left",
-            fg="#d7dff0",
-            bg=background,
-            font=("Menlo", 10),
-        )
-        line.place(x=18, y=150 + idx * 24)
-        event_labels.append(line)
+    transcript_scrollbar = tk.Scrollbar(root, orient="vertical", command=transcript_text.yview)
+    transcript_text.config(yscrollcommand=transcript_scrollbar.set)
 
     status_canvas = tk.Canvas(root, width=width - 36, height=30, bg=background, highlightthickness=0, bd=0)
-    status_canvas.place(x=18, y=height - 38)
+
+    screenshot_photo = None
+    generated_photo = None
+    transcript_lines: Deque[str] = deque(maxlen=220)
+    ui_expanded = False
+    drag_state = {"start_x": 0, "start_y": 0, "win_x": x, "win_y": y, "moved": False}
 
     def render_status() -> None:
         status_canvas.delete("all")
@@ -217,13 +171,72 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
             color = "#00ff85" if healthy else "#ff4b4b"
             status_canvas.create_oval(sx, 10, sx + 10, 20, fill=color, outline=color)
             status_canvas.create_text(sx + 16, 15, anchor="w", text=name, fill="#d7dff0", font=("Menlo", 10))
-            sx += 130
+            sx += 112
 
-    def render_event_lines() -> None:
-        padded = list(model.event_lines)
-        padded = ["" for _ in range(max(0, 5 - len(padded)))] + padded
-        for label, text in zip(event_labels, padded):
-            label.config(text=text)
+    def render_transcript() -> None:
+        transcript_text.config(state="normal")
+        transcript_text.delete("1.0", "end")
+        if transcript_lines:
+            transcript_text.insert("end", "\n".join(transcript_lines))
+        transcript_text.config(state="disabled")
+        transcript_text.see("end")
+
+    def append_transcript(prefix: str, value: str) -> None:
+        text = (value or "").strip()
+        if not text:
+            return
+        transcript_lines.append(f"{prefix}: {text}")
+        if ui_expanded:
+            render_transcript()
+
+    def set_expanded(expanded: bool) -> None:
+        nonlocal ui_expanded
+        ui_expanded = expanded
+        if ui_expanded:
+            root.geometry(f"{width}x{height}+{x}+{y}")
+            wave_canvas.place(x=18, y=18)
+            command_label.place(x=text_left_x, y=18, width=text_width)
+            response_label.place(x=text_left_x, y=60, width=text_width)
+            screenshot_label.place(x=width - 130, y=18, width=110, height=76)
+            transcript_label.place(x=18, y=108)
+            transcript_text.place(x=18, y=128, width=width - 46, height=height - 178)
+            transcript_scrollbar.place(x=width - 28, y=128, width=10, height=height - 178)
+            status_canvas.place(x=18, y=height - 38)
+            render_status()
+            render_transcript()
+        else:
+            root.geometry(f"{collapsed_size}x{collapsed_size}+{x}+{y}")
+            wave_canvas.place(x=(collapsed_size - 88) // 2, y=(collapsed_size - 88) // 2)
+            command_label.place_forget()
+            response_label.place_forget()
+            screenshot_label.place_forget()
+            transcript_label.place_forget()
+            transcript_text.place_forget()
+            transcript_scrollbar.place_forget()
+            status_canvas.place_forget()
+
+    def _on_press(event: Any) -> None:
+        drag_state["start_x"] = event.x_root
+        drag_state["start_y"] = event.y_root
+        drag_state["win_x"] = root.winfo_x()
+        drag_state["win_y"] = root.winfo_y()
+        drag_state["moved"] = False
+
+    def _on_motion(event: Any) -> None:
+        nonlocal x, y
+        dx = event.x_root - drag_state["start_x"]
+        dy = event.y_root - drag_state["start_y"]
+        if abs(dx) > 2 or abs(dy) > 2:
+            drag_state["moved"] = True
+        x = int(drag_state["win_x"] + dx)
+        y = int(drag_state["win_y"] + dy)
+        w = width if ui_expanded else collapsed_size
+        h = height if ui_expanded else collapsed_size
+        root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _on_wave_release(_event: Any) -> None:
+        if not drag_state["moved"]:
+            set_expanded(not ui_expanded)
 
     def draw_wave() -> None:
         nonlocal phase
@@ -231,10 +244,11 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
 
         wave_canvas.delete("wave")
         cx, cy = 44, 44
-        base = 15
-        pulse = 10 if model.is_listening else 2
-        outer = base + pulse * (0.5 + 0.5 * math.sin(phase))
-        inner = max(8, outer - 8)
+        pulse = 4 if model.is_listening else 1.2
+        wobble = 0.5 + 0.5 * math.sin(phase)
+        outer = 32 + pulse * wobble
+        middle = 22 + (pulse * 0.7) * wobble
+        inner = 12 + (pulse * 0.45) * wobble
         ring_color = "#00e5ff" if model.is_listening else "#3a5278"
         core_color = "#1a2a45" if model.is_listening else "#152036"
 
@@ -244,7 +258,16 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
             cx + outer,
             cy + outer,
             outline=ring_color,
-            width=3,
+            width=2,
+            tags="wave",
+        )
+        wave_canvas.create_oval(
+            cx - middle,
+            cy - middle,
+            cx + middle,
+            cy + middle,
+            outline=ring_color,
+            width=2,
             tags="wave",
         )
         wave_canvas.create_oval(
@@ -254,33 +277,13 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
             cy + inner,
             fill=core_color,
             outline=ring_color,
-            width=2,
+            width=1,
             tags="wave",
         )
 
-    generated_photo = None
-
-    def _animate_generated_image(image) -> None:
-        nonlocal generated_photo
-
-        try:
-            from PIL import ImageEnhance, ImageTk
-        except Exception:
-            return
-
-        frames = 10
-        frame_interval_ms = 50
-
-        def _step(frame: int) -> None:
-            nonlocal generated_photo
-            alpha = max(0.0, min(1.0, frame / frames))
-            faded = ImageEnhance.Brightness(image).enhance(alpha)
-            generated_photo = ImageTk.PhotoImage(faded)
-            generated_image_label.config(image=generated_photo)
-            if frame < frames:
-                root.after(frame_interval_ms, lambda: _step(frame + 1))
-
-        _step(0)
+    root.bind("<ButtonPress-1>", _on_press, add="+")
+    root.bind("<B1-Motion>", _on_motion, add="+")
+    wave_canvas.bind("<ButtonRelease-1>", _on_wave_release, add="+")
 
     def apply_message(msg: Dict[str, Any]) -> bool:
         nonlocal screenshot_photo
@@ -292,12 +295,14 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
         elif kind == "command":
             model.last_command = str(msg.get("value", "")).strip()
             command_label.config(text=f"Command: {model.last_command}")
+            append_transcript("Command", model.last_command)
         elif kind == "response":
             model.last_response = str(msg.get("value", "")).strip()
             response_label.config(text=f"Response: {model.last_response}")
+            append_transcript("Response", model.last_response)
         elif kind == "event_log":
             model.event_lines.append(str(msg.get("value", "")))
-            render_event_lines()
+            append_transcript("Event", str(msg.get("value", "")))
         elif kind == "agent_health":
             name = str(msg.get("agent_name", ""))
             if name in TARGET_AGENTS:
@@ -315,39 +320,24 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
                     screenshot_label.config(image=screenshot_photo)
                 except Exception as exc:
                     logger.warning(f"Failed to render HUD thumbnail: {exc}")
-        elif kind == "hud_search_results":
-            query = str(msg.get("query", "")).strip()
-            summary = str(msg.get("summary", "")).strip()
-            sources = msg.get("sources", []) or []
-
-            search_listbox.delete(0, "end")
-            if query:
-                search_listbox.insert("end", f"Query: {query}")
-                search_listbox.insert("end", "")
-            for idx, source in enumerate(sources, start=1):
-                title = str(source.get("title", "Untitled"))
-                url = str(source.get("url", ""))
-                search_listbox.insert("end", f"{idx}. {title}")
-                search_listbox.insert("end", f"   {url}")
-                search_listbox.insert("end", "")
-
-            search_summary_label.config(text=summary)
         elif kind == "hud_generated_image":
             image_path = str(msg.get("image_path", "")).strip()
             prompt = str(msg.get("prompt", "")).strip()
             if image_path and os.path.exists(image_path):
                 try:
-                    from PIL import Image
+                    from PIL import Image, ImageTk
 
-                    image = Image.open(image_path).convert("RGB").resize((256, 256))
-                    _animate_generated_image(image)
-                    generated_caption_label.config(text=prompt)
+                    image = Image.open(image_path).convert("RGB")
+                    image.thumbnail((110, 76))
+                    screenshot_photo = ImageTk.PhotoImage(image)
+                    screenshot_label.config(image=screenshot_photo)
+                    append_transcript("Image", f"Generated: {prompt}")
                 except Exception as exc:
                     logger.warning(f"Failed to render generated image: {exc}")
         return True
 
+    set_expanded(False)
     render_status()
-    render_event_lines()
 
     def tick() -> None:
         keep_running = True
@@ -397,8 +387,8 @@ class JarvisHUDOverlay:
 
     def __init__(
         self,
-        width: int = 620,
-        height: int = 320,
+        width: int = 680,
+        height: int = 380,
         x: int = 24,
         y: int = 24,
         alpha: float = 0.88,
@@ -537,6 +527,10 @@ class JarvisHUDOverlay:
         )
         self._canvas.place(x=18, y=18)
 
+        right_panel_x = self._width - 286
+        text_left_x = 120
+        text_width = max(220, right_panel_x - text_left_x - 20)
+
         self._command_label = tk.Label(
             self._root,
             text="Command: ",
@@ -545,9 +539,9 @@ class JarvisHUDOverlay:
             fg="#ffffff",
             bg=self._background,
             font=("Menlo", 13),
-            wraplength=self._width - 130,
+            wraplength=text_width,
         )
-        self._command_label.place(x=120, y=18)
+        self._command_label.place(x=text_left_x, y=18, width=text_width)
 
         self._response_label = tk.Label(
             self._root,
@@ -557,9 +551,9 @@ class JarvisHUDOverlay:
             fg="#00e5ff",
             bg=self._background,
             font=("Menlo", 13),
-            wraplength=self._width - 130,
+            wraplength=text_width,
         )
-        self._response_label.place(x=120, y=60)
+        self._response_label.place(x=text_left_x, y=60, width=text_width)
 
         self._screenshot_label = tk.Label(
             self._root,
@@ -607,7 +601,7 @@ class JarvisHUDOverlay:
             font=("Menlo", 9),
             wraplength=250,
         )
-        self._search_summary_label.place(x=self._width - 280, y=248, width=250, height=42)
+        self._search_summary_label.place(x=self._width - 280, y=248, width=250, height=66)
 
         self._generated_image_label = tk.Label(
             self._root,
@@ -840,7 +834,7 @@ class JarvisHUDOverlay:
                 fill="#d7dff0",
                 font=("Menlo", 10),
             )
-            x += 130
+            x += 112
 
     def _draw_waveform(self) -> None:
         if self._canvas is None:
@@ -902,8 +896,9 @@ class HUDOverlayController:
             return
 
         hud_kwargs = {
-            "width": int(ui_cfg.get("width", 620)),
-            "height": int(ui_cfg.get("height", 320)),
+            "width": int(ui_cfg.get("width", 680)),
+            "height": int(ui_cfg.get("height", 380)),
+            "collapsed_size": int(ui_cfg.get("collapsed_size", 112)),
             "x": int(ui_cfg.get("x", 24)),
             "y": int(ui_cfg.get("y", 24)),
             "alpha": float(ui_cfg.get("alpha", 0.88)),
@@ -933,7 +928,6 @@ class HUDOverlayController:
         self._tokens.append(self._event_bus.subscribe(AgentErrorEvent, self._on_agent_error))
         self._tokens.append(self._event_bus.subscribe(AgentHealthCheckEvent, self._on_agent_health))
         self._tokens.append(self._event_bus.subscribe(HUDUpdateEvent, self._on_hud_update))
-        self._tokens.append(self._event_bus.subscribe(HUDSearchResultsEvent, self._on_hud_search_results))
         self._tokens.append(self._event_bus.subscribe(HUDImageEvent, self._on_hud_generated_image))
         self._tokens.append(self._event_bus.subscribe(HUDGraphStateEvent, self._on_hud_graph_state))
 

@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import operator
-import os
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
 from bus.event_bus import EventBus
 from schemas.events import HUDGraphStateEvent, IntentRecognizedEvent, VoiceOutputEvent
+from utils.api_keys import get_gemini_api_key
 from utils.logger import get_logger
 
 try:
@@ -124,11 +124,7 @@ class ReasoningEngine:
             logger.warning("langchain-google-genai unavailable; ReasoningEngine LLM disabled")
             return None
 
-        api_key = (
-            os.getenv("GEMINI_API_KEY")
-            or self._get_config("intent.gemini.api_key")
-            or self._get_config("reasoning.gemini.api_key")
-        )
+        api_key = get_gemini_api_key(self._get_config)
         if not api_key:
             logger.warning("Gemini API key not configured; ReasoningEngine disabled")
             return None

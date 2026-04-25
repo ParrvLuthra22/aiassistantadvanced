@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -22,6 +23,27 @@ try:
 except ImportError:
     ImageAgent = None  # type: ignore
     IMAGE_AVAILABLE = False
+try:
+    from agents.vision_agent import VisionAgent
+
+    VISION_AVAILABLE = True
+except ImportError:
+    VisionAgent = None  # type: ignore
+    VISION_AVAILABLE = False
+try:
+    from agents.web_search_agent import WebSearchAgent
+
+    WEB_SEARCH_AVAILABLE = True
+except ImportError:
+    WebSearchAgent = None  # type: ignore
+    WEB_SEARCH_AVAILABLE = False
+try:
+    from agents.macos_control_agent import MacOSControlAgent
+
+    MACOS_CONTROL_AVAILABLE = True
+except ImportError:
+    MacOSControlAgent = None  # type: ignore
+    MACOS_CONTROL_AVAILABLE = False
 from agents.rag_agent import RAGAgent
 from agents.system_agent import SystemAgent
 from agents.tool_agent import ToolAgent
@@ -64,6 +86,53 @@ class OrchestratorState(TypedDict):
 
 
 RAG_INTENTS = {"GENERAL_QUESTION", "RECALL_MEMORY", "HELP"}
+VISION_PATTERNS = [
+    r"\bwhat(?:'| i)?s on my screen\b",
+    r"\bread my screen\b",
+    r"\bdescribe (?:my )?screen\b",
+    r"\bread that\b",
+    r"\bwhat does it say\b",
+    r"\bfind .+ on screen\b",
+    r"\bwhere is .+\b",
+    r"\bclick .+\b",
+    r"\bvisuali[sz]e .+\b",
+    r"\bshow me .+\b",
+    r"\bgenerate image of .+\b",
+]
+WEB_SEARCH_PATTERNS = [
+    r"\bsearch for .+\b",
+    r"\blook up .+\b",
+    r"\bwhat is .+\b",
+    r"\btell me about .+\b",
+    r"\blatest news on .+\b",
+    r"\bwho is .+\b",
+    r"\bhow does .+ work\b",
+]
+MACOS_CONTROL_PATTERNS = [
+    r"\bsend message to .+\b",
+    r"\btext .+\b",
+    r"\bmessage .+ saying .+\b",
+    r"\bopen .+ in safari\b",
+    r"\bopen folder .+\b",
+    r"\bfind file .+\b",
+    r"\bopen downloads\b",
+    r"\bcreate folder .+ in .+\b",
+    r"\bmove file .+ to .+\b",
+    r"\bdelete file .+\b",
+    r"\badd event .+ on .+ at .+\b",
+    r"\bwhat(?:'| i)?s on my calendar\b",
+    r"\bschedule .+\b",
+    r"\bplay .+ on spotify\b",
+    r"\bpause music\b",
+    r"\bnext song\b",
+    r"\bplay playlist .+\b",
+    r"\bwhat(?:'| i)?s playing\b",
+    r"\bset volume to \d+\b",
+    r"\bset brightness to \d+\b",
+    r"\bturn (?:off|on) wifi\b",
+    r"\benable dark mode\b",
+    r"\bwhat(?:'| i)?s my battery\b",
+]
 
 
 class Brain:
@@ -111,9 +180,21 @@ class Brain:
         system_agent = SystemAgent(event_bus=self.event_bus, config=self.config)
         voice_agent = VoiceAgent(event_bus=self.event_bus, config=self.config)
         image_agent = None
+        vision_agent = None
+        web_search_agent = None
+        macos_control_agent = None
         image_cfg = (self.config or {}).get("image", {})
+        vision_cfg = (self.config or {}).get("vision", {})
+        web_cfg = (self.config or {}).get("web_search", {})
+        macos_cfg = (self.config or {}).get("macos_control", {})
         if image_cfg.get("enabled", True) and IMAGE_AVAILABLE:
             image_agent = ImageAgent(event_bus=self.event_bus, config=self.config)
+        if vision_cfg.get("enabled", True) and VISION_AVAILABLE:
+            vision_agent = VisionAgent(event_bus=self.event_bus, config=self.config)
+        if web_cfg.get("enabled", True) and WEB_SEARCH_AVAILABLE:
+            web_search_agent = WebSearchAgent(event_bus=self.event_bus, config=self.config)
+        if macos_cfg.get("enabled", True) and MACOS_CONTROL_AVAILABLE:
+            macos_control_agent = MacOSControlAgent(event_bus=self.event_bus, config=self.config)
 
         self._agents = {
             "MemoryAgent": memory_agent,
@@ -122,6 +203,12 @@ class Brain:
         }
         if image_agent is not None:
             self._agents["ImageAgent"] = image_agent
+        if vision_agent is not None:
+            self._agents["VisionAgent"] = vision_agent
+        if web_search_agent is not None:
+            self._agents["WebSearchAgent"] = web_search_agent
+        if macos_control_agent is not None:
+            self._agents["MacOSControlAgent"] = macos_control_agent
 
         for agent in self._agents.values():
             await agent.start()
@@ -149,7 +236,9 @@ class Brain:
             self._hud_overlay = None
 
         self._state = BrainState.RUNNING
-        logger.info("[LangGraphBrain] running with nodes: IntentAgent -> (RAGAgent|ToolAgent) -> MemoryAgent")
+        logger.info(
+            "[LangGraphBrain] running with nodes: IntentAgent -> (RAGAgent|ToolAgent|EventBusAgent) -> MemoryAgent"
+        )
 
     async def stop(self, reason: str = "Normal shutdown") -> None:
         """Stop subscriptions and agents gracefully."""
@@ -199,14 +288,16 @@ class Brain:
         """EventBus entrypoint: run graph then emit response speech event."""
         try:
             final_state = await self.execute(text=event.text, correlation_id=event.event_id)
-            response_text = final_state.get("response_text") or "I processed your request."
-            await self.event_bus.emit(
-                VoiceOutputEvent(
-                    text=response_text,
-                    source="LangGraphBrain",
-                    correlation_id=event.event_id,
+            response_text = (final_state.get("response_text") or "").strip()
+            # Event-bus delegated routes (vision/web/macos) emit their own voice output.
+            if response_text:
+                await self.event_bus.emit(
+                    VoiceOutputEvent(
+                        text=response_text,
+                        source="LangGraphBrain",
+                        correlation_id=event.event_id,
+                    )
                 )
-            )
         except Exception as exc:
             logger.error(f"[LangGraphBrain] workflow failure: {exc}", exc_info=True)
             await self.event_bus.emit(
@@ -223,6 +314,7 @@ class Brain:
         graph.add_node("IntentAgent", self._intent_agent_node)
         graph.add_node("RAGAgent", self._rag_agent_node)
         graph.add_node("ToolAgent", self._tool_agent_node)
+        graph.add_node("EventBusAgent", self._event_bus_agent_node)
         graph.add_node("MemoryAgent", self._memory_agent_node)
 
         graph.add_edge(START, "IntentAgent")
@@ -232,10 +324,12 @@ class Brain:
             {
                 "RAGAgent": "RAGAgent",
                 "ToolAgent": "ToolAgent",
+                "EventBusAgent": "EventBusAgent",
             },
         )
         graph.add_edge("RAGAgent", "MemoryAgent")
         graph.add_edge("ToolAgent", "MemoryAgent")
+        graph.add_edge("EventBusAgent", "MemoryAgent")
         graph.add_edge("MemoryAgent", END)
         return graph.compile()
 
@@ -248,21 +342,21 @@ class Brain:
         intent = str(top.get("intent", "UNKNOWN"))
         confidence = float(top.get("confidence", 0.0))
         entities = dict(top.get("entities", {}))
+        route = self._select_route(intent=intent, raw_text=state["raw_text"])
 
-        # Keep compatibility with agents that listen on event bus
-        await self.event_bus.emit(
-            IntentRecognizedEvent(
-                intent=intent,
-                confidence=confidence,
-                entities=entities,
-                raw_text=state["raw_text"],
-                slots=entities,
-                source="LangGraphBrain.IntentAgent",
-                correlation_id=state["correlation_id"],
+        # Broadcast only for routes handled by event-driven agents.
+        if route == "EventBusAgent":
+            await self.event_bus.emit(
+                IntentRecognizedEvent(
+                    intent=intent,
+                    confidence=confidence,
+                    entities=entities,
+                    raw_text=state["raw_text"],
+                    slots=entities,
+                    source="LangGraphBrain.IntentAgent",
+                    correlation_id=state["correlation_id"],
+                )
             )
-        )
-
-        route = "RAGAgent" if intent in RAG_INTENTS else "ToolAgent"
         return {
             **state,
             "intent": intent,
@@ -274,6 +368,20 @@ class Brain:
 
     def _route_after_intent(self, state: OrchestratorState) -> str:
         return state["route"]
+
+    def _select_route(self, intent: str, raw_text: str) -> str:
+        if self._is_event_bus_intent(raw_text):
+            return "EventBusAgent"
+        if intent in RAG_INTENTS or intent == "UNKNOWN":
+            return "RAGAgent"
+        return "ToolAgent"
+
+    def _is_event_bus_intent(self, raw_text: str) -> bool:
+        text = (raw_text or "").strip().lower()
+        if not text:
+            return False
+        pattern_sets = (VISION_PATTERNS, WEB_SEARCH_PATTERNS, MACOS_CONTROL_PATTERNS)
+        return any(re.search(pattern, text) for patterns in pattern_sets for pattern in patterns)
 
     async def _rag_agent_node(self, state: OrchestratorState) -> OrchestratorState:
         logger.info("[NODE] RAGAgent")
@@ -292,6 +400,14 @@ class Brain:
             "rag_context": rag,
             "response_text": response,
             "trace": [*state["trace"], "RAGAgent:ok"],
+        }
+
+    async def _event_bus_agent_node(self, state: OrchestratorState) -> OrchestratorState:
+        logger.info("[NODE] EventBusAgent")
+        return {
+            **state,
+            "response_text": "",
+            "trace": [*state["trace"], "EventBusAgent:delegated"],
         }
 
     async def _tool_agent_node(self, state: OrchestratorState) -> OrchestratorState:
