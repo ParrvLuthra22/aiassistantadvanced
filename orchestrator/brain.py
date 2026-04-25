@@ -574,9 +574,10 @@ class Brain:
         default_startup_order = [
             "MemoryAgent",
             "SystemAgent", 
+            "VoiceAgent",
             "IntentAgent",
             "PluginAgent",
-            "VoiceAgent",
+            "VisionAgent",
         ]
         
         self._brain_config = BrainConfig(
@@ -609,7 +610,7 @@ class Brain:
         
         # Response templates for meta-intents
         self._meta_responses: Dict[str, str] = {
-            "greeting": "Hello! I'm JARVIS, your virtual assistant. How can I help you?",
+            "greeting": "Hello Sir. I'm FRIDAY, your virtual assistant. How can I help you?",
             "help": "I can help you control your Mac. Try saying things like 'open Safari', 'set volume to 50', or 'take a screenshot'.",
             "status": "All systems are operational. I'm ready to assist.",
             "goodbye": "Goodbye! Have a great day.",
@@ -740,11 +741,15 @@ class Brain:
             
             logger.info("Brain started successfully")
             
-            # Announce we're ready
-            await self._event_bus.publish(VoiceOutputEvent(
-                text="JARVIS online and ready to assist.",
-                source="Brain",
-            ))
+            # Announce readiness only when startup face-auth greeting is not enabled.
+            face_auth_enabled = bool(
+                self._config.get("security", {}).get("face_auth", {}).get("enabled", False)
+            )
+            if not face_auth_enabled:
+                await self._event_bus.publish(VoiceOutputEvent(
+                    text="FRIDAY online and ready to assist, Sir.",
+                    source="Brain",
+                ))
             
         except Exception as e:
             self._state = BrainState.ERROR
@@ -853,6 +858,7 @@ class Brain:
         image_config = self._config.get("image", {})
         plugins_config = self._config.get("plugins", {})
         web_search_config = self._config.get("web_search", {})
+        security_config = self._config.get("security", {})
         
         # Create and register agents
         agents = [
@@ -860,7 +866,7 @@ class Brain:
             SystemAgent(config={"system": system_config}),
             MacOSControlAgent(config={"system": system_config}),
             WebSearchAgent(config={"web_search": web_search_config, "intent": intent_config, "system": system_config}),
-            IntentAgent(config={"intent": intent_config}),
+            IntentAgent(config={"intent": intent_config, "security": security_config, "reasoning": self._config.get("reasoning", {})}),
             PluginAgent(config={"plugins": plugins_config}),
             VoiceAgent(config={"voice": voice_config}),
         ]
@@ -883,7 +889,7 @@ class Brain:
             else:
                 logger.warning(
                     "Vision is enabled in config but dependencies are not installed. "
-                    "Install with: pip install google-generativeai pyautogui pillow"
+                    "Install with: pip install pyautogui pillow pytesseract opencv-python"
                 )
         else:
             logger.debug("VisionAgent not registered (vision disabled in config)")

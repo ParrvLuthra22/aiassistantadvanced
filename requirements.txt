@@ -78,6 +78,8 @@ torch>=2.4.0                 # PyTorch backend (Apple Silicon supports MPS)
 pyautogui>=0.9.54         # Screen control and click automation
 pillow>=10.3.0            # Screenshot capture (PIL.ImageGrab)
 pytesseract>=0.3.10       # Local OCR fallback when cloud vision is unavailable
+opencv-python>=4.10.0     # Local face detection/authentication and camera access
+numpy>=1.24.0             # Numeric arrays for local face embeddings
 
 # ------------------------------------------------------------------------------
 # Future: Vector Database (for semantic memory)

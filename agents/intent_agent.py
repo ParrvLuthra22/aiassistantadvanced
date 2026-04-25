@@ -40,6 +40,8 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 from agents.base_agent import AgentCapability, BaseAgent
 from bus.event_bus import EventBus
@@ -49,10 +51,12 @@ from schemas.events import (
     IntentUnknownEvent,
     MultiIntentEvent,
     VoiceInputEvent,
+    VoiceOutputEvent,
 )
 from utils.logger import get_logger
 from utils.prompts import IntentPrompts, FallbackPatterns, log_prompt_usage
 from utils.api_keys import get_gemini_api_key
+from utils.face_auth import FaceAuthenticator
 
 
 logger = get_logger(__name__)
@@ -606,6 +610,127 @@ class OpenAINLUProvider(NLUProvider):
 
 
 # =============================================================================
+# Ollama NLU Provider (local open-source models)
+# =============================================================================
+
+class OllamaNLUProvider(NLUProvider):
+    """NLU provider backed by a local Ollama model."""
+
+    def __init__(
+        self,
+        model: str = "qwen2.5:7b-instruct",
+        endpoint: str = "http://127.0.0.1:11434/api/generate",
+        temperature: float = 0.2,
+        max_retries: int = 1,
+    ):
+        self._model = model
+        self._endpoint = endpoint
+        self._temperature = temperature
+        self._max_retries = max_retries
+        self._intents: List[IntentDefinition] = []
+        self._available = False
+
+    async def initialize(self, intents: List[IntentDefinition]) -> None:
+        self._intents = intents
+        self._available = await self._check_ollama_health()
+        if self._available:
+            logger.info(f"Ollama NLU initialized: model={self._model}")
+        else:
+            logger.warning("Ollama not reachable. Install/start Ollama to enable local NLU.")
+
+    @property
+    def is_available(self) -> bool:
+        return self._available
+
+    async def process(
+        self,
+        text: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not self._available:
+            return {"is_multi_command": False, "intents": [], "execution_mode": "sequential"}
+
+        intent_dicts = [i.to_dict() for i in self._intents]
+        system_prompt = IntentPrompts.get_system_prompt(intent_dicts)
+        user_prompt = IntentPrompts.get_user_prompt(text, context)
+        full_prompt = (
+            f"{system_prompt}\n\n---\n\n{user_prompt}\n\n"
+            "Return strictly valid JSON with keys: is_multi_command, intents, execution_mode."
+        )
+
+        for attempt in range(self._max_retries + 1):
+            try:
+                result = await self._call_ollama(full_prompt)
+                if "intents" not in result:
+                    result["intents"] = []
+                if "is_multi_command" not in result:
+                    result["is_multi_command"] = len(result["intents"]) > 1
+                if "execution_mode" not in result:
+                    result["execution_mode"] = "sequential"
+                return result
+            except Exception as exc:
+                logger.warning(f"Ollama attempt {attempt + 1} failed: {exc}")
+                if attempt == self._max_retries:
+                    break
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        return {"is_multi_command": False, "intents": [], "execution_mode": "sequential"}
+
+    async def shutdown(self) -> None:
+        self._available = False
+
+    async def _check_ollama_health(self) -> bool:
+        def _run() -> bool:
+            req = urlrequest.Request("http://127.0.0.1:11434/api/tags", method="GET")
+            with urlrequest.urlopen(req, timeout=2) as resp:
+                return resp.status == 200
+
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, _run)
+        except Exception:
+            return False
+
+    async def _call_ollama(self, prompt: str) -> Dict[str, Any]:
+        payload = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": self._temperature},
+        }
+
+        def _run() -> Dict[str, Any]:
+            req = urlrequest.Request(
+                self._endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlrequest.urlopen(req, timeout=45) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+
+            raw = str(body.get("response", "")).strip()
+            if not raw:
+                raise RuntimeError("Ollama returned empty response")
+
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start >= 0 and end > start:
+                    return json.loads(raw[start : end + 1])
+                raise
+
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, _run)
+        except urlerror.URLError as exc:
+            raise RuntimeError(f"Ollama network error: {exc}") from exc
+
+
+# =============================================================================
 # Pattern Matcher Provider (Fallback)
 # =============================================================================
 
@@ -701,6 +826,9 @@ class IntentAgent(BaseAgent):
         )
         self._last_provider_success: Optional[bool] = None
         self._reasoning_engine: Optional[ReasoningEngine] = None
+        self._face_auth_enabled = bool(self._get_config("security.face_auth.enabled", True))
+        self._face_authenticator: Optional[FaceAuthenticator] = None
+        self._access_granted = not self._face_auth_enabled
     
     @property
     def capabilities(self) -> List[AgentCapability]:
@@ -751,12 +879,16 @@ class IntentAgent(BaseAgent):
         
         # Initialize providers
         await self._initialize_providers()
-        self._reasoning_engine = ReasoningEngine(event_bus=self._event_bus, config=self._config)
+        if self._is_truthy(self._get_config("reasoning.enabled", False)):
+            self._reasoning_engine = ReasoningEngine(event_bus=self._event_bus, config=self._config)
+        else:
+            self._reasoning_engine = None
+        await self._initialize_face_auth()
         
         # Subscribe to voice input
         self._subscribe(VoiceInputEvent, self._handle_voice_input)
         
-        provider_name = self._get_config("intent.provider", "gemini")
+        provider_name = self._get_config("intent.provider", "pattern")
         self._logger.info(
             f"Intent agent initialized with {len(self._intents)} intents "
             f"using {provider_name} provider"
@@ -772,12 +904,18 @@ class IntentAgent(BaseAgent):
     
     async def _initialize_providers(self) -> None:
         """Initialize NLU providers based on configuration."""
-        provider_name = self._get_config("intent.provider", "gemini")
+        provider_name = str(self._get_config("intent.provider", "pattern")).lower()
         
         if provider_name == "gemini":
             self._primary_provider = GeminiNLUProvider(
                 model=self._get_config("intent.gemini.model", "gemini-2.0-flash"),
                 temperature=self._get_config("intent.gemini.temperature", 0.2),
+            )
+        elif provider_name == "ollama":
+            self._primary_provider = OllamaNLUProvider(
+                model=self._get_config("intent.ollama.model", "qwen2.5:7b-instruct"),
+                endpoint=self._get_config("intent.ollama.endpoint", "http://127.0.0.1:11434/api/generate"),
+                temperature=self._get_config("intent.ollama.temperature", 0.2),
             )
         elif provider_name == "openai":
             self._primary_provider = OpenAINLUProvider(
@@ -824,6 +962,16 @@ class IntentAgent(BaseAgent):
         text = event.text
         if not text or not text.strip():
             return
+
+        if self._face_auth_enabled and not self._access_granted:
+            await self._emit(
+                VoiceOutputEvent(
+                    text="Access denied, Sir. Face verification failed at startup.",
+                    source=self._name,
+                    correlation_id=event.event_id,
+                )
+            )
+            return
         
         self._logger.debug(f"Processing: '{text}'")
 
@@ -852,6 +1000,38 @@ class IntentAgent(BaseAgent):
         
         # Process results
         await self._emit_results(result, text, event.event_id)
+
+    async def _initialize_face_auth(self) -> None:
+        """Verify operator identity at startup using local face recognition."""
+        if not self._face_auth_enabled:
+            self._access_granted = True
+            return
+
+        self._face_authenticator = FaceAuthenticator(
+            data_dir=str(self._get_config("security.face_auth.data_dir", "data/face_auth")),
+            camera_id=int(self._get_config("security.face_auth.camera_id", 0)),
+            threshold=float(self._get_config("security.face_auth.threshold", 0.82)),
+        )
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, self._face_authenticator.verify_or_enroll)
+        self._access_granted = result.granted
+
+        owner_name = str(self._get_config("security.face_auth.owner_name", "parrv luthra")).strip()
+        if result.granted:
+            verification_text = (
+                f"{owner_name} verification successful. "
+                "Hello Sir what are we working on today"
+            )
+        else:
+            verification_text = result.message
+
+        await self._emit(
+            VoiceOutputEvent(
+                text=verification_text,
+                source=self._name,
+            )
+        )
     
     async def _emit_results(
         self,
@@ -926,6 +1106,14 @@ class IntentAgent(BaseAgent):
         """Get conversation context from memory agent."""
         # TODO: Query memory agent for recent history
         return {}
+
+    @staticmethod
+    def _is_truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
     
     def _get_suggestions(self, text: str) -> List[str]:
         """Get suggestions for unknown input."""

@@ -1,344 +1,191 @@
-# JARVIS Virtual Assistant
+# FRIDAY Personal Assistant
 
-A modular, event-driven virtual assistant for macOS, inspired by JARVIS from Iron Man.
+FRIDAY is a modular, event-driven macOS assistant with voice control, local intent parsing, screen OCR, automation tooling, and an HUD.
 
-## Architecture
+This project is designed for local-first usage on Apple Silicon with optional cloud integrations.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Brain                                    │
-│                    (Orchestrator)                                │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                    Event Bus                                 │ │
-│  │              (Pub/Sub Communication)                         │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│         ▲              ▲              ▲              ▲           │
-│         │              │              │              │           │
-│    ┌────┴────┐   ┌────┴────┐   ┌────┴────┐   ┌────┴────┐       │
-│    │  Voice  │   │ Intent  │   │ System  │   │ Memory  │       │
-│    │  Agent  │   │  Agent  │   │  Agent  │   │  Agent  │       │
-│    └─────────┘   └─────────┘   └─────────┘   └─────────┘     │
-└─────────────────────────────────────────────────────────────────┘
-```
+## What FRIDAY Can Do
 
-### Core Components
+### Voice + Conversation
+- Wake word listening (`friday`)
+- Speech-to-text pipeline (Vosk + Whisper.cpp flow)
+- Text-to-speech with Kokoro (`af_heart`) and fallback to `pyttsx3`
+- Polite owner addressing (`Sir`) in spoken responses
 
-- **Brain (Orchestrator)**: Central coordinator managing agent lifecycle and health
-- **Event Bus**: Pub/sub system for decoupled agent communication
-- **Agents**: Specialized modules handling specific domains
-- **Health API**: FastAPI endpoint for observability (GET `/health`)
+### Identity + Access Control
+- Startup face verification gate before command handling
+- Local face profile enrollment and verification
+- Configurable identity threshold and camera source
+- On success FRIDAY says:
+  - `parrv luthra verification successful. Hello Sir what are we working on today`
 
-### Agents
+### Vision / Screen Understanding (Local)
+- Full screen capture (`/tmp/friday_screen.png`)
+- Local OCR via Tesseract (no Gemini required)
+- Screen reading intents such as:
+  - “what’s on my screen”
+  - “read my screen”
+  - “read that”
+  - “where is X on screen”
 
-| Agent | Responsibility |
-|-------|---------------|
-| **VoiceAgent** | Speech recognition (STT) and synthesis (TTS) |
-| **IntentAgent** | Natural language understanding and intent classification |
-| **SystemAgent** | macOS system commands and integrations |
-| **MemoryAgent** | Conversation history and persistent memory |
-| **PluginAgent** | Loads Python plugins from `plugins/` and routes intents |
+### macOS Control
+- App opening/switching
+- Safari web opening/search flows
+- Finder operations
+- Calendar operations
+- Spotify controls
+- System controls (volume, brightness CLI, Wi-Fi toggle, dark mode, battery query)
 
-## Project Structure
+### Web + Research
+- Web search agent with source summarization pipeline (provider-dependent)
+- HUD updates with current command/response and event transcript
 
-```
-aiassistanttrying/
-├── main.py                    # Application entry point
-├── agents/                    # Domain agents (voice, intent, system, memory, etc.)
-├── orchestrator/              # Brain coordinators (legacy + LangGraph paths)
-├── bus/                       # Event bus and pub/sub wiring
-├── schemas/                   # Event/data schemas
-├── config/                    # Runtime settings and typed config helpers
-├── plugins/                   # Plugin integrations
-├── rag/                       # Retrieval-augmented memory pipeline
-├── api/                       # API endpoints (health, diagnostics)
-├── ui/                        # HUD and interface modules
-├── utils/                     # Shared utilities (logging, audio, prompts, TTS/STT)
-├── tests/                     # Test suite
-├── scripts/                   # Setup and maintenance scripts
-├── docs/                      # Architecture and migration documentation
-└── requirements.txt           # Python dependencies
-```
+### Image Generation
+- Local SDXL-Turbo image generation agent (Apple Silicon path)
+- HUD image event rendering for generated outputs
 
-Detailed architecture and migration docs live in [`docs/README.md`](docs/README.md).
+### Multi-step Reasoning
+- LangGraph-based reasoning engine scaffold for complex multi-tool requests
+- Plan -> execute -> verify -> respond workflow
+
+## Architecture Overview
+
+- `orchestrator/brain.py`: lifecycle + routing + startup orchestration
+- `bus/event_bus.py`: pub/sub backbone
+- `agents/*`: domain-specific capability modules
+- `schemas/events.py`: typed event contracts
+- `ui/hud_overlay.py`: floating HUD
+- `config/settings.yaml`: runtime configuration
 
 ## Quick Start
 
-### Prerequisites
-
-- macOS (tested on Monterey and later)
-- Python 3.10+
-- Gemini API key (for intent recognition)
-- PortAudio (for microphone access)
-
-### Installation
+## 1) Create venv and install
 
 ```bash
-# Clone the repository
-cd aiassistanttrying
-
-# Install PortAudio (macOS)
-brew install portaudio
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
-
-# Install voice dependencies (FREE, offline)
-pip install vosk pyttsx3 pyaudio SpeechRecognition
-
-# Set up environment variables
-export GEMINI_API_KEY="your-api-key-here"
-
-# Run the assistant
-python3 main.py
 ```
 
-## Observability
-
-JARVIS exposes a health endpoint for basic observability:
-
-- **Endpoint:** `GET http://localhost:8080/health`
-- **Response shape:**
-
-```json
-{
-    "status": "ok",
-    "agents": {
-        "VoiceAgent": "healthy",
-        "IntentAgent": "healthy",
-        "SystemAgent": "healthy"
-    }
-}
-```
-
-The server starts automatically when the Brain starts and shuts down during shutdown.
-
-## Plugins
-
-Place Python plugins in `plugins/` and they are auto-loaded at startup.
-
-Each plugin must define:
-
-```python
-PLUGIN_NAME = "MyPlugin"
-TRIGGERS = ["my intent", "another intent"]
-
-async def handle(event):
-        return "Response text"
-```
-
-Example plugin: `plugins/calculator_plugin.py`.
-
-## CI
-
-GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push and PRs to `main`:
-
-- Python 3.10
-- Installs `requirements.txt`
-- Runs `pytest tests/ --cov=. --cov-config=.coveragerc --cov-fail-under=40`
-
-### Voice Setup (Optional but Recommended)
-
-For full voice capabilities, install:
-
-#### 1. Vosk Wake Word Detection (FREE, offline)
+## 2) Install required macOS dependencies
 
 ```bash
-# Download Vosk model
-mkdir -p models
-cd models
-wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-unzip vosk-model-small-en-us-0.15.zip
-cd ..
+brew install portaudio tesseract brightness
 ```
 
-#### 2. Whisper.cpp Transcription (FREE, offline, high accuracy)
+If you use Whisper.cpp binary mode, ensure `voice.whisper.binary_path` points to a valid binary.
+
+## 3) Ensure Kokoro model files exist
+
+Expected files in repo root:
+- `kokoro-v0_19.onnx`
+- `voices.bin`
+
+## 4) Run FRIDAY
 
 ```bash
-# Build whisper.cpp
-git clone https://github.com/ggerganov/whisper.cpp
-cd whisper.cpp
-make
-
-# Download model
-./models/download-ggml-model.sh base.en
-
-# Install binary
-sudo cp main /usr/local/bin/whisper-cpp
-cp models/ggml-base.en.bin ../models/
-cd ..
+./.venv/bin/python main.py
 ```
 
-### Configuration
+## Face Verification Setup (Required for locked startup)
 
-Edit `config/settings.yaml` to customize:
+FRIDAY is configured to enforce face verification at startup (`security.face_auth.enabled: true`).
 
-- Wake word (`voice.wake_word`)
-- Vosk model path (`voice.vosk.model_path`)
-- Whisper binary/model paths (`voice.whisper.*`)
-- TTS voice and rate (`voice.synthesis.*`)
-- Silence detection thresholds
+## Step A: grant camera permission
 
-## Voice Architecture
+On macOS:
+- System Settings -> Privacy & Security -> Camera
+- Enable access for whichever app runs Python:
+  - Terminal / iTerm / VS Code (if using integrated terminal)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      VoiceAgent                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐           │
-│  │ Microphone  │──▶│ Vosk Wake   │──▶│ whisper.cpp │           │
-│  │  Stream     │   │ Word Detect │   │ Transcriber │           │
-│  └─────────────┘   └─────────────┘   └─────────────┘           │
-│         │                │                  │                   │
-│         │    "jarvis"    │                  │                   │
-│         │    detected    │                  ▼                   │
-│         │                │         ┌─────────────┐              │
-│         │                └────────▶│   Emit      │              │
-│         │                          │VoiceInput   │              │
-│         │                          │   Event     │              │
-│         │                          └─────────────┘              │
-│         │                                                       │
-│         │         ┌─────────────┐   ┌─────────────┐            │
-│         └────────▶│  pyttsx3    │◀──│ Subscribe   │            │
-│                   │    TTS      │   │VoiceOutput  │            │
-│                   └─────────────┘   │   Event     │            │
-│                                     └─────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Key Features:**
-- 🎤 **Wake Word**: Vosk (FREE, runs locally)
-- 🗣️ **Speech-to-Text**: whisper.cpp (FREE, high accuracy, offline)
-- 🔊 **Text-to-Speech**: pyttsx3 (FREE, uses macOS native voices)
-- 🧵 **Non-blocking**: Background threads for audio processing
-- 📡 **Event-driven**: All communication via EventBus
-
-## Usage Examples
-
-Once running, speak to JARVIS:
-
-- "Open Safari"
-- "Search for Python tutorials"
-- "What time is it?"
-- "Set volume to 50"
-- "What can you do?"
-
-## Extending the System
-
-### Adding a New Agent
-
-1. Create a new agent in `agents/`:
-
-```python
-from agents.base_agent import BaseAgent, AgentCapability
-
-class MyAgent(BaseAgent):
-    @property
-    def capabilities(self):
-        return [AgentCapability(
-            name="my_capability",
-            description="What it does"
-        )]
-    
-    async def _setup(self):
-        self._subscribe(SomeEvent, self._handler)
-    
-    async def _teardown(self):
-        pass
-    
-    async def _handler(self, event):
-        # Handle the event
-        pass
-```
-
-2. Register it in `orchestrator/brain.py`
-
-### Adding New Events
-
-Define new events in `schemas/events.py`:
-
-```python
-@dataclass(frozen=True)
-class MyNewEvent(BaseEvent):
-    my_field: str = ""
-    source: str = field(default="my_agent")
-```
-
-## Future Roadmap
-
-## Phase 1 RAG Memory (Implemented)
-
-The assistant now includes a **Chroma-backed semantic memory pipeline** integrated with `MemoryAgent`.
-
-### What it does
-
-- Stores short-term and long-term semantic memory chunks in Chroma
-- Uses metadata-aware retrieval with recency + salience scoring
-- Provides diversified retrieval (MMR) and context assembly utilities
-- Keeps existing SQLite memory behavior as-is
-
-### Configuration
-
-In `config/settings.yaml`:
-
-- `memory.vector_store.enabled`
-- `memory.vector_store.provider`
-- `memory.vector_store.persist_directory`
-- `memory.vector_store.collection_name`
-- `memory.vector_store.embedding_model` (optional)
-
-### Smoke test
-
-Run the Phase 1 verification script:
+## Step B: enroll your face profile
 
 ```bash
-python3 scripts/rag_phase1_smoke.py
+./.venv/bin/python scripts/enroll_face.py --camera-id 0
 ```
 
-Expected: it ingests sample memories and prints retrieved semantic matches.
+If camera `0` fails, try:
 
-## HUD Overlay (Implemented)
+```bash
+./.venv/bin/python scripts/enroll_face.py --camera-id 1
+```
 
-A live macOS HUD overlay is now integrated and starts automatically with the Brain.
+Enrollment stores profile data in `data/face_auth`.
 
-### HUD features
+## Step C: verify startup phrase
 
-- Borderless, always-on-top semi-transparent dark window
-- Pulsing circular waveform while `VoiceAgent` is listening
-- Last spoken command and latest assistant response
-- Live EventBus log (last 5 events: timestamp + event type + source)
-- Agent health row with status dots for:
-    - `VoiceAgent`
-    - `IntentAgent`
-    - `SystemAgent`
-    - `MemoryAgent`
+After restart, FRIDAY should speak:
 
-### HUD configuration
+`parrv luthra verification successful. Hello Sir what are we working on today`
 
-In `config/settings.yaml` under `ui.hud`:
+If verification fails, commands remain blocked.
 
-- `enabled`
-- `width`, `height`, `x`, `y`
-- `alpha`
-- `background`
+## Configuration You’ll Likely Edit
 
-- [ ] Wake word detection (Porcupine)
-- [ ] Local Whisper STT
-- [ ] OpenCV integration
-- [ ] Multi-agent workflows
-- [ ] Plugin system
-- [ ] Remote control API
+Primary file: `config/settings.yaml`
 
-## Design Principles
+- `general.assistant_name`: currently `FRIDAY`
+- `voice.wake_word`: currently `friday`
+- `voice.tts.voice_id`: currently `af_heart`
+- `voice.address_user_as_sir`: true
+- `security.face_auth.owner_name`: currently `parrv luthra`
+- `security.face_auth.enabled`: true/false
+- `security.face_auth.camera_id`: camera index
+- `vision.local_ocr_enabled`: true
+- `intent.provider`: `ollama` (recommended local) or `pattern`
 
-- **Event-Driven**: All communication via events
-- **Modular**: Agents are independent and replaceable
-- **Scalable**: Easy to add new agents and capabilities
-- **SOLID**: Clean architecture following SOLID principles
+## Manual Test Plan
 
-## License
+Use these spoken commands (or keyboard input path, depending on your run mode):
 
-MIT License - feel free to use and modify.
+1. Identity and greeting
+- Start FRIDAY and confirm verification greeting is spoken.
+
+2. Voice response baseline
+- “Friday, what time is it?”
+
+3. Screen OCR
+- Put visible text on screen, then say:
+  - “What’s on my screen?”
+  - “Read all text on my screen”
+
+4. App control
+- “Open Safari”
+- “Search for Python context managers”
+
+5. System control
+- “Set volume to 40”
+- “What’s my battery?”
+
+6. Finder/utility checks
+- “Open downloads”
+
+7. Image generation
+- “Generate image of a futuristic assistant dashboard”
+
+## Troubleshooting
+
+### `Face enrollment failed: no clear face detected`
+- Improve lighting and face framing.
+- Close apps occupying camera (Zoom/Meet/FaceTime).
+- Recheck macOS camera permissions.
+
+### `camera access has been denied`
+- macOS permission issue, not model issue.
+- Grant camera access to the app launching Python.
+
+### No speech audio
+- Check selected audio output device.
+- Confirm Kokoro files exist.
+- FRIDAY falls back to `pyttsx3` on Kokoro failure.
+
+### OCR not working
+- Confirm `tesseract` is installed (`brew install tesseract`).
+- Ensure `pytesseract` is installed in the same venv.
+
+## Project Status
+
+This is an actively evolving assistant stack. Some advanced flows are experimental and improving in each iteration.
+
+For your next pass, run the manual test plan and report exactly which command failed + what FRIDAY said/logged. That gives the fastest fix cycle.

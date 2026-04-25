@@ -15,7 +15,7 @@
 # -----------------------------------------------------------------------------
 general:
   # Assistant name and personality
-  assistant_name: "JARVIS"
+  assistant_name: "FRIDAY"
   version: "0.1.0"
   
   # -------------------------------------------------------------------------
@@ -38,7 +38,7 @@ general:
   
   # Log file path (relative to project root)
   # Set to null/empty to disable file logging
-  log_file: "logs/jarvis.log"
+  log_file: "logs/friday.log"
   
   # Log rotation strategy: daily, size, none
   log_rotation: "daily"
@@ -64,7 +64,7 @@ general:
   # Structured Logging (Machine-Readable)
   # -------------------------------------------------------------------------
   # Enable JSON-formatted logs for file output
-  # JSON logs are written to logs/jarvis.json.log alongside human-readable logs
+  # JSON logs are written to logs/friday.json.log alongside human-readable logs
   # Useful for log aggregation (ELK, Loki, Splunk, CloudWatch)
   json_logs: false
   
@@ -81,7 +81,7 @@ general:
 # -----------------------------------------------------------------------------
 voice:
   # Wake word settings
-  wake_word: "jarvis"
+  wake_word: "friday"
   wake_word_sensitivity: 0.5  # 0.0 to 1.0
   
   # Vosk settings for wake word detection (lightweight, always-on)
@@ -132,7 +132,10 @@ voice:
   tts:
     # Preferred engine: kokoro (neural) with pyttsx3 fallback.
     engine: "kokoro"
-    voice_id: "af_sky"
+    voice_id: "af_heart"
+
+  # Always address owner as "Sir" in spoken responses.
+  address_user_as_sir: true
 
   # Legacy synthesis block kept for backward compatibility.
   synthesis:
@@ -150,8 +153,8 @@ voice:
 # Intent Agent Configuration
 # -----------------------------------------------------------------------------
 intent:
-  # NLU provider: 'gemini', 'openai', 'local', 'rasa', 'custom'
-  provider: "gemini"
+  # NLU provider: 'ollama', 'pattern', 'gemini', 'openai'
+  provider: "ollama"
   
   # Gemini settings (if using Gemini provider)
   gemini:
@@ -168,6 +171,12 @@ intent:
     max_tokens: 500
     api_key: null
     # API key should be in environment: OPENAI_API_KEY
+
+  # Ollama settings (local open-source model, no API key)
+  ollama:
+    model: "qwen2.5:7b-instruct"
+    endpoint: "http://127.0.0.1:11434/api/generate"
+    temperature: 0.2
   
   # Confidence thresholds
   confidence_threshold: 0.5  # Minimum confidence for intent matching
@@ -209,13 +218,6 @@ intent:
 # -----------------------------------------------------------------------------
 # System Agent Configuration
 # -----------------------------------------------------------------------------
-vision:
-  gemini:
-    model: "gemini-2.0-flash"
-    # Last-resort troubleshooting flag for SSL interception environments.
-    # Keep false unless TLS trust chain cannot be repaired.
-    allow_insecure_ssl: false
-
 system:
   # macOS integration settings
   macos:
@@ -276,7 +278,7 @@ memory:
     enabled: true
     provider: "chroma"  # 'chroma', 'pinecone', 'weaviate'
     persist_directory: "data/chroma_memory"
-    collection_name: "jarvis_memory"
+    collection_name: "friday_memory"
     embedding_model: null  # Optional: e.g. sentence-transformers/all-MiniLM-L6-v2
     chunk_size_tokens: 400
     chunk_overlap_tokens: 64
@@ -287,11 +289,11 @@ memory:
 orchestrator:
   # Agent startup order (dependencies)
   startup_order:
-    - "memory_agent"
-    - "system_agent"
-    - "intent_agent"
-    - "voice_agent"
-    - "vision_agent"      # Optional: only started if vision.enabled = true
+    - "MemoryAgent"
+    - "SystemAgent"
+    - "VoiceAgent"
+    - "IntentAgent"
+    - "VisionAgent"      # Optional: only started if vision.enabled = true
   
   # Health check interval in seconds
   health_check_interval: 30
@@ -305,6 +307,12 @@ orchestrator:
   
   # Graceful shutdown timeout
   shutdown_timeout_seconds: 10
+
+# -----------------------------------------------------------------------------
+# Multi-step Reasoning Engine
+# -----------------------------------------------------------------------------
+reasoning:
+  enabled: false
 
 # -----------------------------------------------------------------------------
 # Event Bus Configuration
@@ -335,6 +343,12 @@ security:
   rate_limit:
     enabled: true
     max_requests_per_minute: 60
+  face_auth:
+    enabled: true
+    camera_id: 0
+    threshold: 0.82
+    data_dir: "data/face_auth"
+    owner_name: "parrv luthra"
 
 # -----------------------------------------------------------------------------
 # UI / HUD Configuration
@@ -369,6 +383,9 @@ vision:
   # Enable/disable the VisionAgent
   # Set to true to enable camera-based gesture and face recognition
   enabled: true
+  # Disable cloud Gemini vision; use local OCR fallback by default.
+  use_gemini: false
+  local_ocr_enabled: true
   
   # -------------------------------------------------------------------------
   # Camera Settings

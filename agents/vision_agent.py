@@ -69,7 +69,7 @@ from schemas.events import (
 from utils.api_keys import get_gemini_api_key
 
 
-SCREENSHOT_PATH = Path("/tmp/jarvis_screen.png")
+SCREENSHOT_PATH = Path("/tmp/friday_screen.png")
 DEFAULT_GEMINI_MODEL_NAME = "gemini-2.0-flash"
 MIN_CLICK_CONFIDENCE = 0.7
 MAX_OCR_RESPONSE_CHARS = 1800
@@ -108,6 +108,8 @@ class VisionAgent(BaseAgent):
         self._model = None
         self._genai_client = None
         self._gemini_model_name = DEFAULT_GEMINI_MODEL_NAME
+        self._use_gemini = False
+        self._local_ocr_enabled = True
         self._gemini_enabled = False
         self._gemini_status_reason = "not initialized"
         self._gemini_api_key: Optional[str] = None
@@ -125,7 +127,13 @@ class VisionAgent(BaseAgent):
 
     async def _setup(self) -> None:
         self._configure_pyautogui()
-        self._initialize_gemini()
+        self._use_gemini = self._is_truthy(self._get_config("vision.use_gemini", False))
+        self._local_ocr_enabled = self._is_truthy(self._get_config("vision.local_ocr_enabled", True))
+        if self._use_gemini:
+            self._initialize_gemini()
+        else:
+            self._gemini_enabled = False
+            self._gemini_status_reason = "disabled (local OCR mode)"
         self._subscribe(IntentRecognizedEvent, self._handle_intent)
         self._subscribe(ScreenshotEvent, self._handle_screenshot_event)
 
@@ -324,7 +332,14 @@ class VisionAgent(BaseAgent):
                     correlation_id=event.correlation_id or event.event_id,
                 )
             )
-            response_text = await self._ask_gemini(prompt)
+            if self._use_gemini:
+                response_text = await self._ask_gemini(prompt)
+            else:
+                response_text = await self._answer_with_local_ocr(
+                    mode=mode,
+                    query=query,
+                    gemini_exc=RuntimeError("Cloud vision disabled in config"),
+                )
         except Exception as gemini_exc:
             response_text = await self._answer_with_local_ocr(
                 mode=mode,
@@ -365,15 +380,18 @@ class VisionAgent(BaseAgent):
                 "Return strict JSON with keys x, y, confidence. "
                 "Confidence must be a number between 0 and 1."
             )
-            response_text = await self._ask_gemini(prompt)
-            parsed = self._parse_coordinates(response_text)
+            if self._use_gemini:
+                response_text = await self._ask_gemini(prompt)
+                parsed = self._parse_coordinates(response_text)
+            else:
+                raise RuntimeError("Cloud vision disabled in config")
         except Exception as gemini_exc:
             try:
                 parsed = await self._find_query_coordinates_via_ocr(query)
                 if not parsed.has_coordinates:
                     message = (
-                        "I couldn't complete that click with Gemini, and OCR fallback could not "
-                        f"find '{query}'. Gemini error: {gemini_exc}"
+                        "I couldn't complete that click with cloud vision, and OCR fallback could "
+                        f"not find '{query}'. Error: {gemini_exc}"
                     )
                 elif parsed.confidence < MIN_CLICK_CONFIDENCE:
                     message = (
@@ -384,7 +402,7 @@ class VisionAgent(BaseAgent):
                     clicked = await self._safe_click(parsed.x, parsed.y)
                     if clicked:
                         message = (
-                            f"Gemini was unavailable, so I used local OCR and clicked {query} at "
+                            f"Cloud vision was unavailable, so I used local OCR and clicked {query} at "
                             f"({parsed.x}, {parsed.y}) with confidence {parsed.confidence:.2f}."
                         )
                     else:
@@ -725,7 +743,7 @@ class VisionAgent(BaseAgent):
             ocr_text, words = await self._run_local_ocr()
         except Exception as ocr_exc:
             return (
-                f"I couldn't analyze the screen with Gemini ({gemini_exc}), and local OCR fallback "
+                f"I couldn't analyze the screen with cloud vision ({gemini_exc}), and local OCR fallback "
                 f"failed: {ocr_exc}"
             )
 
@@ -733,30 +751,30 @@ class VisionAgent(BaseAgent):
             match = self._find_best_ocr_match(query, words)
             if match is None:
                 return (
-                    f"Gemini is unavailable ({gemini_exc}). I used local OCR but couldn't find "
+                    f"Cloud vision is unavailable ({gemini_exc}). I used local OCR but couldn't find "
                     f"'{query}' on screen."
                 )
             return (
-                f"Gemini is unavailable ({gemini_exc}). Local OCR found '{query}' near "
+                f"Cloud vision is unavailable ({gemini_exc}). Local OCR found '{query}' near "
                 f"pixel ({match.x}, {match.y}) with confidence {match.confidence:.2f}."
             )
 
         cleaned = self._clean_ocr_text(ocr_text)
         if not cleaned:
             return (
-                f"Gemini is unavailable ({gemini_exc}). Local OCR ran, but no readable text "
+                f"Cloud vision is unavailable ({gemini_exc}). Local OCR ran, but no readable text "
                 "was detected on screen."
             )
 
         if mode == "read":
             return (
-                "Gemini is unavailable, so I used local OCR. "
+                "Cloud vision is unavailable, so I used local OCR. "
                 f"Here is the text I can read:\n{cleaned}"
             )
 
         # For describe/general, provide OCR text as best-effort local fallback.
         return (
-            "Gemini is unavailable, so I used local OCR. "
+            "Cloud vision is unavailable, so I used local OCR. "
             f"Visible text on screen:\n{cleaned}"
         )
 
@@ -779,6 +797,8 @@ class VisionAgent(BaseAgent):
         )
 
     async def _run_local_ocr(self) -> Tuple[str, List[OCRWord]]:
+        if not self._local_ocr_enabled:
+            raise RuntimeError("Local OCR is disabled in config.")
         if not OCR_AVAILABLE or pytesseract is None:
             raise RuntimeError(
                 "pytesseract is not installed. Install with: pip install pytesseract"

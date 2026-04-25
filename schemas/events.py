@@ -200,14 +200,14 @@ class VoiceOutputEvent(BaseEvent):
 @dataclass(frozen=True)
 class WakeWordDetectedEvent(BaseEvent):
     """
-    Event emitted when wake word (e.g., "Hey JARVIS") is detected.
+    Event emitted when wake word (e.g., "Hey FRIDAY") is detected.
     
     Attributes:
         wake_word: The detected wake word
         confidence: Detection confidence
     """
     
-    wake_word: str = "jarvis"
+    wake_word: str = "friday"
     confidence: float = 0.0
     source: str = field(default="voice_agent")
 
@@ -702,7 +702,7 @@ class ScreenshotEvent(BaseEvent):
     """
 
     bbox: Optional[tuple[int, int, int, int]] = None
-    save_path: str = "/tmp/jarvis_screen.png"
+    save_path: str = "/tmp/friday_screen.png"
     source: str = field(default="orchestrator")
 
 

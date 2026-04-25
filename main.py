@@ -445,7 +445,7 @@ async def main() -> int:
     
     logger = get_logger(__name__)
     logger.info("=" * 60)
-    logger.info("JARVIS Virtual Assistant Starting")
+    logger.info("FRIDAY Virtual Assistant Starting")
     logger.info(f"Python {sys.version}")
     logger.info(f"Project root: {PROJECT_ROOT}")
     logger.info("=" * 60)
@@ -527,7 +527,7 @@ async def main() -> int:
         
     finally:
         logger.info("=" * 60)
-        logger.info("JARVIS Virtual Assistant Stopped")
+        logger.info("FRIDAY Virtual Assistant Stopped")
         logger.info("=" * 60)
 
 
@@ -571,7 +571,7 @@ def _cleanup_on_exit() -> None:
     if _brain_instance is not None:
         # Note: atexit handlers can't run async code properly
         # The graceful shutdown in main() should handle this
-        print("JARVIS cleanup complete")
+        print("FRIDAY cleanup complete")
 
 
 if __name__ == "__main__":

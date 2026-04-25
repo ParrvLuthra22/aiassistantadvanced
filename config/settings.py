@@ -20,11 +20,11 @@ DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
 
 class GeneralSettings(BaseModel):
-    assistant_name: str = "JARVIS"
+    assistant_name: str = "FRIDAY"
     version: str = "0.1.0"
     log_level: str = "INFO"
     log_format: str = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-    log_file: str = "logs/jarvis.log"
+    log_file: str = "logs/friday.log"
     log_rotation: str = "daily"
     log_max_size_mb: int = 10
     log_backup_count: int = 7
@@ -70,17 +70,18 @@ class VoiceSynthesisSettings(BaseModel):
 
 class VoiceTTSSettings(BaseModel):
     engine: str = "kokoro"
-    voice_id: str = "af_sky"
+    voice_id: str = "af_heart"
 
 
 class VoiceSettings(BaseModel):
-    wake_word: str = "jarvis"
+    wake_word: str = "friday"
     wake_word_sensitivity: float = 0.5
     vosk: VoiceVoskSettings = Field(default_factory=VoiceVoskSettings)
     whisper: VoiceWhisperSettings = Field(default_factory=VoiceWhisperSettings)
     recognition: VoiceRecognitionSettings = Field(default_factory=VoiceRecognitionSettings)
     tts: VoiceTTSSettings = Field(default_factory=VoiceTTSSettings)
     synthesis: VoiceSynthesisSettings = Field(default_factory=VoiceSynthesisSettings)
+    address_user_as_sir: bool = True
 
 
 class IntentProviderSettings(BaseModel):
@@ -90,10 +91,17 @@ class IntentProviderSettings(BaseModel):
     api_key: Optional[str] = None
 
 
+class IntentOllamaSettings(BaseModel):
+    model: str = "qwen2.5:7b-instruct"
+    endpoint: str = "http://127.0.0.1:11434/api/generate"
+    temperature: float = 0.2
+
+
 class IntentSettings(BaseModel):
-    provider: str = "gemini"
+    provider: str = "pattern"
     gemini: IntentProviderSettings = Field(default_factory=lambda: IntentProviderSettings(model="gemini-2.0-flash"))
     openai: IntentProviderSettings = Field(default_factory=lambda: IntentProviderSettings(model="gpt-4"))
+    ollama: IntentOllamaSettings = Field(default_factory=IntentOllamaSettings)
     confidence_threshold: float = 0.5
     ambiguity_threshold: float = 0.3
     intents: List[Dict[str, Any]] = Field(default_factory=list)
@@ -139,7 +147,7 @@ class MemoryVectorStoreSettings(BaseModel):
     enabled: bool = False
     provider: str = "chroma"
     persist_directory: str = "data/chroma_memory"
-    collection_name: str = "jarvis_memory"
+    collection_name: str = "friday_memory"
     embedding_model: Optional[str] = None
     chunk_size_tokens: int = 400
     chunk_overlap_tokens: int = 64
@@ -155,7 +163,7 @@ class MemorySettings(BaseModel):
 
 
 class OrchestratorSettings(BaseModel):
-    startup_order: List[str] = Field(default_factory=lambda: ["memory_agent", "system_agent", "intent_agent", "voice_agent", "vision_agent"])
+    startup_order: List[str] = Field(default_factory=lambda: ["MemoryAgent", "SystemAgent", "VoiceAgent", "IntentAgent", "VisionAgent"])
     health_check_interval: int = 30
     default_task_timeout: int = 30
     max_retries: int = 3
@@ -175,10 +183,19 @@ class SecurityRateLimitSettings(BaseModel):
     max_requests_per_minute: int = 60
 
 
+class SecurityFaceAuthSettings(BaseModel):
+    enabled: bool = True
+    camera_id: int = 0
+    threshold: float = 0.82
+    data_dir: str = "data/face_auth"
+    owner_name: str = "parrv luthra"
+
+
 class SecuritySettings(BaseModel):
     sandbox_commands: bool = True
     max_command_length: int = 500
     rate_limit: SecurityRateLimitSettings = Field(default_factory=SecurityRateLimitSettings)
+    face_auth: SecurityFaceAuthSettings = Field(default_factory=SecurityFaceAuthSettings)
 
 
 class HUDSettings(BaseModel):
@@ -239,6 +256,8 @@ class VisionPrivacySettings(BaseModel):
 
 class VisionSettings(BaseModel):
     enabled: bool = True
+    use_gemini: bool = False
+    local_ocr_enabled: bool = True
     camera: VisionCameraSettings = Field(default_factory=VisionCameraSettings)
     gestures: VisionGesturesSettings = Field(default_factory=VisionGesturesSettings)
     face: VisionFaceSettings = Field(default_factory=VisionFaceSettings)

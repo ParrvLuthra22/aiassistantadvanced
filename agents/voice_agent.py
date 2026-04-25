@@ -78,7 +78,7 @@ class VoiceAgentState(Enum):
 class VoiceConfig:
     """Configuration for VoiceAgent loaded from settings.yaml."""
     # Wake word settings
-    wake_word: str = "jarvis"
+    wake_word: str = "friday"
     wake_word_sensitivity: float = 0.5
     
     # Vosk settings
@@ -104,11 +104,12 @@ class VoiceConfig:
     
     # TTS settings
     tts_provider: str = "kokoro"
-    tts_voice_id: str = "af_sky"
+    tts_voice_id: str = "af_heart"
     tts_rate: int = 180
     tts_volume: float = 1.0
     tts_fallback_provider: str = "system"
     tts_fallback_voice: str = "Samantha"
+    address_user_as_sir: bool = True
 
 
 class KokoroTTS:
@@ -120,11 +121,11 @@ class KokoroTTS:
       - voices.bin
     """
 
-    def __init__(self, voice_id: str = "af_sky"):
+    def __init__(self, voice_id: str = "af_heart"):
         if not KOKORO_AVAILABLE or Kokoro is None or sd is None:
             raise RuntimeError("kokoro-onnx/sounddevice are not available")
         self.model = Kokoro("kokoro-v0_19.onnx", "voices.bin")
-        self.voice = voice_id or "af_sky"
+        self.voice = voice_id or "af_heart"
 
     def speak(self, text: str):
         if not text.strip():
@@ -142,7 +143,7 @@ class KokoroTTS:
 class AsyncKokoroTTS:
     """Async adapter so VoiceAgent can use Kokoro with the existing async API."""
 
-    def __init__(self, voice_id: str = "af_sky"):
+    def __init__(self, voice_id: str = "af_heart"):
         self._engine = KokoroTTS(voice_id=voice_id)
         self._is_speaking = False
         self._lock = threading.Lock()
@@ -274,12 +275,12 @@ class VoiceAgent(BaseAgent):
             tts_config.get("engine", synthesis_config.get("provider", "kokoro"))
         )
         tts_voice_id = str(
-            tts_config.get("voice_id", synthesis_config.get("voice", "af_sky"))
+            tts_config.get("voice_id", synthesis_config.get("voice", "af_heart"))
         )
         
         return VoiceConfig(
             # Wake word
-            wake_word=voice_config.get("wake_word", "jarvis"),
+            wake_word=voice_config.get("wake_word", "friday"),
             wake_word_sensitivity=voice_config.get("wake_word_sensitivity", 0.5),
             
             # Vosk
@@ -309,6 +310,7 @@ class VoiceAgent(BaseAgent):
             tts_volume=synthesis_config.get("volume", 1.0),
             tts_fallback_provider=synthesis_config.get("fallback_provider", "system"),
             tts_fallback_voice=synthesis_config.get("fallback_voice", "Samantha"),
+            address_user_as_sir=bool(voice_config.get("address_user_as_sir", True)),
         )
     
     # =========================================================================
@@ -917,6 +919,8 @@ class VoiceAgent(BaseAgent):
         
         if not event.text:
             return
+
+        spoken_text = self._format_for_owner(event.text)
         
         # Set speaking state
         self._set_voice_state(VoiceAgentState.SPEAKING)
@@ -929,7 +933,7 @@ class VoiceAgent(BaseAgent):
             if self._tts:
                 try:
                     await self._tts.speak(
-                        text=event.text,
+                        text=spoken_text,
                         voice=event.voice_id if event.voice_id != "default" else "",
                         rate=event.speed,
                     )
@@ -940,7 +944,7 @@ class VoiceAgent(BaseAgent):
                     if switched and self._tts:
                         try:
                             await self._tts.speak(
-                                text=event.text,
+                                text=spoken_text,
                                 voice=event.voice_id if event.voice_id != "default" else "",
                                 rate=event.speed,
                             )
@@ -954,6 +958,17 @@ class VoiceAgent(BaseAgent):
                 self._wake_word_detector.enable()
             
             self._set_voice_state(VoiceAgentState.LISTENING_WAKE_WORD)
+
+    def _format_for_owner(self, text: str) -> str:
+        cleaned = (text or "").strip()
+        if not cleaned or not self._voice_config.address_user_as_sir:
+            return cleaned
+        lowered = cleaned.lower()
+        if "verification successful" in lowered:
+            return cleaned
+        if lowered.startswith(("sir,", "sir ", "good morning sir", "good evening sir")):
+            return cleaned
+        return f"Sir, {cleaned}"
     
     async def _handle_shutdown(self, event: ShutdownRequestedEvent) -> None:
         """Handle shutdown request."""

@@ -74,7 +74,7 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
     background = str(config.get("background", "#0a0e1a"))
 
     root = tk.Tk()
-    root.title("JARVIS HUD")
+    root.title("FRIDAY HUD")
     root.geometry(f"{collapsed_size}x{collapsed_size}+{x}+{y}")
     root.configure(bg=background)
     root.overrideredirect(True)
@@ -483,7 +483,7 @@ class JarvisHUDOverlay:
             root = tk.Tk()
             self._root = root
 
-            root.title("JARVIS HUD")
+            root.title("FRIDAY HUD")
             root.geometry(f"{self._width}x{self._height}+{self._x}+{self._y}")
             root.configure(bg=self._background)
             root.overrideredirect(True)

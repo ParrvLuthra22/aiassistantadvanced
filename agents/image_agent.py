@@ -76,7 +76,7 @@ class ImageAgent(BaseAgent):
                     num_inference_steps=1,
                     guidance_scale=0.0,
                 ).images[0]
-                path = f"/tmp/jarvis_gen_{int(time.time())}.png"
+                path = f"/tmp/friday_gen_{int(time.time())}.png"
                 image.save(path)
                 return path
 
