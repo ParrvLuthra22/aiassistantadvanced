@@ -347,7 +347,7 @@ class Brain:
         owner_name = str(security_cfg.get("owner_name", "parrv luthra")).strip()
         owner_display = owner_name.title()
         camera_id = int(security_cfg.get("camera_id", 0))
-        threshold = float(security_cfg.get("threshold", 0.82))
+        threshold = float(security_cfg.get("threshold", 0.78))
         data_dir = str(security_cfg.get("data_dir", "data/face_auth"))
         delay = float(security_cfg.get("startup_delay_seconds", 1.2))
 

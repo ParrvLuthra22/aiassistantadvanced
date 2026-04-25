@@ -346,7 +346,7 @@ security:
   face_auth:
     enabled: true
     camera_id: 0
-    threshold: 0.82
+    threshold: 0.78
     data_dir: "data/face_auth"
     owner_name: "parrv luthra"
     startup_delay_seconds: 1.2

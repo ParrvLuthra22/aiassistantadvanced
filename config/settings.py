@@ -186,7 +186,7 @@ class SecurityRateLimitSettings(BaseModel):
 class SecurityFaceAuthSettings(BaseModel):
     enabled: bool = True
     camera_id: int = 0
-    threshold: float = 0.82
+    threshold: float = 0.78
     data_dir: str = "data/face_auth"
     owner_name: str = "parrv luthra"
     startup_delay_seconds: float = 1.2

@@ -6,7 +6,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -31,24 +31,29 @@ class FaceAuthenticator:
     """
     Lightweight local face authentication using OpenCV + cosine similarity.
 
-    This is intentionally lightweight for Apple Silicon laptops with limited RAM.
-    It stores a normalized face embedding in local files under data/face_auth.
+    Robustness improvements:
+    - Multi-frame capture for both enroll and verify
+    - Reference embedding bank instead of single embedding
+    - Retry pass before deny to reduce false negatives
+    - Optional incremental bank update when verified
     """
 
     def __init__(
         self,
         data_dir: str = "data/face_auth",
         camera_id: int = 0,
-        threshold: float = 0.82,
+        threshold: float = 0.78,
     ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.camera_id = int(camera_id)
         self.threshold = float(threshold)
 
-        self.embedding_path = self.data_dir / "reference_embedding.npy"
+        self.bank_path = self.data_dir / "reference_embeddings.npy"
+        self.embedding_path = self.data_dir / "reference_embedding.npy"  # legacy
         self.meta_path = self.data_dir / "reference_meta.json"
         self._last_capture_error: str = ""
+        self._loaded_legacy_profile = False
 
     def verify_or_enroll(self) -> FaceAuthResult:
         if not CV2_AVAILABLE or cv2 is None:
@@ -57,8 +62,12 @@ class FaceAuthenticator:
                 message="Face auth unavailable: opencv-python is not installed.",
             )
 
-        current = self._capture_embedding()
-        if current is None:
+        captured = self._capture_embeddings(
+            sample_count=6,
+            max_frames=140,
+            allow_center_crop_fallback=True,
+        )
+        if not captured:
             if self._last_capture_error == "camera_unavailable":
                 return FaceAuthResult(
                     granted=False,
@@ -72,31 +81,52 @@ class FaceAuthenticator:
                 message="Face auth failed: no clear face detected from camera.",
             )
 
-        if not self.embedding_path.exists():
-            return self._enroll_from_embedding(current)
+        bank = self._load_reference_bank()
+        if bank is None:
+            return self._enroll_from_embeddings(captured)
 
-        saved = self._load_reference()
-        if saved is None:
-            return self._enroll_from_embedding(
-                current,
-                message="Face profile was corrupted and has been recreated. Access granted, Sir.",
+        best_similarity, best_embedding = self._best_similarity(captured, bank)
+        bank_size = int(bank.shape[0]) if bank.ndim > 1 else 1
+        effective_threshold = self._effective_threshold(bank_size)
+        if best_embedding is None:
+            return FaceAuthResult(
+                granted=False,
+                message="Face auth failed: could not compare captured samples.",
             )
 
-        similarity = self._cosine_similarity(saved, current)
-        if similarity >= self.threshold:
+        if best_similarity >= effective_threshold:
+            self._promote_bank_on_success(bank=bank, captured=captured, best_embedding=best_embedding)
             return FaceAuthResult(
                 granted=True,
-                message=f"Identity verified (similarity {similarity:.2f}). Access granted, Sir.",
-                similarity=similarity,
+                message=f"Identity verified (similarity {best_similarity:.2f}). Access granted, Sir.",
+                similarity=best_similarity,
             )
+
+        # Retry one more capture pass before denying.
+        retry = self._capture_embeddings(
+            sample_count=6,
+            max_frames=140,
+            allow_center_crop_fallback=True,
+        )
+        if retry:
+            retry_similarity, retry_best = self._best_similarity(retry, bank)
+            if retry_best is not None and retry_similarity >= effective_threshold:
+                self._promote_bank_on_success(bank=bank, captured=retry, best_embedding=retry_best)
+                return FaceAuthResult(
+                    granted=True,
+                    message=f"Identity verified (similarity {retry_similarity:.2f}). Access granted, Sir.",
+                    similarity=retry_similarity,
+                )
+            if retry_similarity > best_similarity:
+                best_similarity = retry_similarity
 
         return FaceAuthResult(
             granted=False,
             message=(
-                f"Identity check failed (similarity {similarity:.2f}). "
+                f"Identity check failed (similarity {best_similarity:.2f}, threshold {effective_threshold:.2f}). "
                 "Access denied until the registered user is recognized."
             ),
-            similarity=similarity,
+            similarity=best_similarity,
         )
 
     def force_enroll(self) -> FaceAuthResult:
@@ -106,8 +136,13 @@ class FaceAuthenticator:
                 granted=False,
                 message="Face enrollment unavailable: opencv-python is not installed.",
             )
-        current = self._capture_embedding(allow_center_crop_fallback=True)
-        if current is None:
+
+        captured = self._capture_embeddings(
+            sample_count=8,
+            max_frames=180,
+            allow_center_crop_fallback=True,
+        )
+        if not captured:
             if self._last_capture_error == "camera_unavailable":
                 return FaceAuthResult(
                     granted=False,
@@ -120,46 +155,70 @@ class FaceAuthenticator:
                 granted=False,
                 message="Face enrollment failed: no clear face detected from camera.",
             )
-        return self._enroll_from_embedding(
-            current,
+
+        return self._enroll_from_embeddings(
+            captured,
             message="Face profile updated successfully. Access granted, Sir.",
         )
 
-    def _capture_embedding(self, allow_center_crop_fallback: bool = False) -> Optional[np.ndarray]:
+    def _capture_embeddings(
+        self,
+        sample_count: int = 6,
+        max_frames: int = 140,
+        allow_center_crop_fallback: bool = False,
+    ) -> List[np.ndarray]:
         if not CV2_AVAILABLE or cv2 is None:
-            return None
+            return []
 
         self._last_capture_error = ""
         cap = self._open_camera()
         if not cap.isOpened():
             self._last_capture_error = "camera_unavailable"
-            return None
+            return []
 
+        samples: List[np.ndarray] = []
         frame = None
+        frame_idx = 0
         try:
-            # Warm up camera and try multiple frames to improve face detection reliability.
-            for _ in range(40):
+            while frame_idx < max_frames and len(samples) < sample_count:
                 ok, frame = cap.read()
+                frame_idx += 1
                 if not ok or frame is None:
-                    time.sleep(0.03)
+                    time.sleep(0.02)
                     continue
+
                 face_crop = self._extract_largest_face(frame)
-                if face_crop is not None:
-                    return self._build_embedding(face_crop)
+                if face_crop is None:
+                    time.sleep(0.02)
+                    continue
+
+                emb = self._build_embedding(face_crop)
+                if emb.size == 0:
+                    continue
+
+                # Keep diverse samples, avoid identical duplicates.
+                if samples:
+                    dup = max(self._cosine_similarity(emb, prev) for prev in samples)
+                    if dup > 0.999:
+                        continue
+
+                samples.append(emb)
                 time.sleep(0.03)
-            if frame is None:
-                return None
-            if allow_center_crop_fallback:
+
+            if not samples and frame is not None and allow_center_crop_fallback:
                 center_crop = self._extract_center_crop(frame)
                 if center_crop is not None:
-                    return self._build_embedding(center_crop)
-            return None
+                    emb = self._build_embedding(center_crop)
+                    if emb.size > 0:
+                        samples.append(emb)
+            return samples
         finally:
             cap.release()
 
     def _open_camera(self):
         if cv2 is None:
             return None
+
         candidates = []
         if hasattr(cv2, "CAP_AVFOUNDATION"):
             candidates.append(cv2.CAP_AVFOUNDATION)
@@ -175,6 +234,7 @@ class FaceAuthenticator:
             if cap.isOpened():
                 return cap
             cap.release()
+
         return cv2.VideoCapture(self.camera_id)
 
     def _extract_largest_face(self, frame: np.ndarray) -> Optional[np.ndarray]:
@@ -190,7 +250,8 @@ class FaceAuthenticator:
             "haarcascade_frontalface_default.xml",
             "haarcascade_frontalface_alt2.xml",
         ]
-        faces = []
+
+        faces: List[Tuple[int, int, int, int]] = []
         for cascade_file in cascade_files:
             cascade = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / cascade_file))
             if cascade.empty():
@@ -203,12 +264,12 @@ class FaceAuthenticator:
                     minSize=(min_size, min_size),
                 )
                 if len(found) > 0:
-                    faces = found
+                    faces = found.tolist() if hasattr(found, "tolist") else list(found)
                     break
-            if len(faces) > 0:
+            if faces:
                 break
 
-        if len(faces) == 0:
+        if not faces:
             return None
 
         x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
@@ -240,17 +301,107 @@ class FaceAuthenticator:
             return emb
         return emb / norm
 
-    def _save_reference(self, embedding: np.ndarray) -> None:
-        np.save(self.embedding_path, embedding)
-        payload = {"threshold": self.threshold}
+    @staticmethod
+    def _best_similarity(captured: List[np.ndarray], bank: np.ndarray) -> tuple[float, Optional[np.ndarray]]:
+        if bank.ndim == 1:
+            bank = bank.reshape(1, -1)
+
+        best = 0.0
+        best_emb: Optional[np.ndarray] = None
+        for emb in captured:
+            for ref in bank:
+                sim = FaceAuthenticator._cosine_similarity(emb, ref)
+                if sim > best:
+                    best = sim
+                    best_emb = emb
+        return best, best_emb
+
+    def _save_reference_bank(self, bank: np.ndarray) -> None:
+        if bank.ndim == 1:
+            bank = bank.reshape(1, -1)
+        np.save(self.bank_path, bank)
+
+        # Legacy single embedding for compatibility.
+        centroid = np.mean(bank, axis=0)
+        norm = np.linalg.norm(centroid)
+        if norm > 0:
+            centroid = centroid / norm
+        np.save(self.embedding_path, centroid)
+
+        payload = {
+            "threshold": self.threshold,
+            "samples": int(bank.shape[0]),
+        }
         self.meta_path.write_text(json.dumps(payload, indent=2))
 
-    def _enroll_from_embedding(
+    def _append_reference(self, embedding: np.ndarray, max_size: int = 24) -> None:
+        bank = self._load_reference_bank()
+        if bank is None:
+            new_bank = embedding.reshape(1, -1)
+        else:
+            if bank.ndim == 1:
+                bank = bank.reshape(1, -1)
+            new_bank = np.vstack([bank, embedding.reshape(1, -1)])
+            if len(new_bank) > max_size:
+                new_bank = new_bank[-max_size:]
+        self._save_reference_bank(new_bank)
+
+    @staticmethod
+    def _merge_unique_embeddings(bank: np.ndarray, captured: List[np.ndarray], max_size: int = 24) -> np.ndarray:
+        """Merge captured embeddings into bank while avoiding near-duplicates."""
+        if bank.ndim == 1:
+            bank = bank.reshape(1, -1)
+        merged = [ref.copy() for ref in bank]
+        for emb in captured:
+            if emb.size == 0:
+                continue
+            if merged:
+                dup = max(FaceAuthenticator._cosine_similarity(emb, ref) for ref in merged)
+                if dup > 0.999:
+                    continue
+            merged.append(emb.copy())
+            if len(merged) >= max_size:
+                break
+        if not merged:
+            return bank
+        arr = np.vstack([m.reshape(1, -1) for m in merged])
+        if len(arr) > max_size:
+            arr = arr[-max_size:]
+        return arr
+
+    def _promote_bank_on_success(
         self,
-        embedding: np.ndarray,
+        bank: np.ndarray,
+        captured: List[np.ndarray],
+        best_embedding: np.ndarray,
+    ) -> None:
+        """
+        Update the profile after a successful verify.
+
+        For legacy single-vector profiles, promote to a richer multi-sample bank
+        using current captures. This greatly improves stability on future boots.
+        """
+        if bank.ndim == 1:
+            bank = bank.reshape(1, -1)
+
+        if self._loaded_legacy_profile and not self.bank_path.exists():
+            promoted = self._merge_unique_embeddings(bank, captured, max_size=24)
+            self._save_reference_bank(promoted)
+            self._loaded_legacy_profile = False
+            return
+
+        self._append_reference(best_embedding, max_size=24)
+
+    def _enroll_from_embeddings(
+        self,
+        embeddings: List[np.ndarray],
         message: str = "Face profile created. Access granted, Sir.",
     ) -> FaceAuthResult:
-        self._save_reference(embedding)
+        valid = [emb for emb in embeddings if emb.size > 0]
+        if not valid:
+            return FaceAuthResult(granted=False, message="No valid face embeddings captured.")
+        bank = np.vstack([emb.reshape(1, -1) for emb in valid])
+        self._save_reference_bank(bank)
         return FaceAuthResult(
             granted=True,
             message=message,
@@ -258,11 +409,37 @@ class FaceAuthenticator:
             enrolled=True,
         )
 
-    def _load_reference(self) -> Optional[np.ndarray]:
+    def _load_reference_bank(self) -> Optional[np.ndarray]:
         try:
-            return np.load(self.embedding_path)
+            if self.bank_path.exists():
+                bank = np.load(self.bank_path)
+                if bank.ndim == 1:
+                    bank = bank.reshape(1, -1)
+                self._loaded_legacy_profile = False
+                return bank
+            if self.embedding_path.exists():
+                emb = np.load(self.embedding_path)
+                if emb.ndim == 1:
+                    emb = emb.reshape(1, -1)
+                self._loaded_legacy_profile = True
+                return emb
         except Exception:
             return None
+        return None
+
+    def _effective_threshold(self, bank_size: int) -> float:
+        """
+        Compute a robust threshold.
+
+        Single-sample legacy profiles are noisy, so allow a slightly lower
+        threshold and then immediately upgrade the profile on success.
+        """
+        base = float(self.threshold)
+        if bank_size <= 1:
+            return max(0.72, base - 0.06)
+        if bank_size == 2:
+            return max(0.74, base - 0.03)
+        return base
 
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:

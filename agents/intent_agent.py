@@ -1065,7 +1065,7 @@ class IntentAgent(BaseAgent):
         self._face_authenticator = FaceAuthenticator(
             data_dir=str(self._get_config("security.face_auth.data_dir", "data/face_auth")),
             camera_id=int(self._get_config("security.face_auth.camera_id", 0)),
-            threshold=float(self._get_config("security.face_auth.threshold", 0.82)),
+            threshold=float(self._get_config("security.face_auth.threshold", 0.78)),
         )
 
         try:
